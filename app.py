@@ -19,6 +19,9 @@ st.set_page_config(page_title="Job Rate Finder", page_icon="💼", layout="cente
 
 # ============================================================
 # Styling (UI only)
+# NOTE: We do NOT try to wrap widgets in raw <div> tags because Streamlit
+# doesn’t guarantee HTML wrappers will contain interactive widgets.
+# Instead, we style Streamlit containers and our markdown blocks.
 # ============================================================
 APP_CSS = """
 <style>
@@ -57,13 +60,17 @@ APP_CSS = """
     font-size: 15px;
   }
 
-  .jr-card{
+  /* Streamlit "container border" card styling */
+  div[data-testid="stContainer"]{
     background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 18px 18px 14px 18px;
+    border: 1px solid var(--border) !important;
+    border-radius: 16px !important;
     box-shadow: var(--shadow);
     backdrop-filter: blur(10px);
+  }
+  /* tighten inner padding a bit */
+  div[data-testid="stContainer"] > div{
+    padding: 12px 14px 14px 14px;
   }
 
   label, .stMarkdown p { color: var(--muted) !important; }
@@ -90,9 +97,7 @@ APP_CSS = """
     background: linear-gradient(90deg, var(--accent), var(--accent2));
     box-shadow: 0 12px 35px rgba(109,94,252,.35);
   }
-  .stButton button:hover{
-    filter: brightness(1.05);
-  }
+  .stButton button:hover{ filter: brightness(1.05); }
 
   .jr-range{
     background: linear-gradient(90deg, var(--accent), var(--accent2));
@@ -101,6 +106,7 @@ APP_CSS = """
     color: white;
     box-shadow: var(--shadow);
     border: 1px solid rgba(255,255,255,.10);
+    margin-top: 16px;
   }
   .jr-range-top{
     display:flex;
@@ -108,38 +114,16 @@ APP_CSS = """
     align-items:center;
     margin-bottom: 10px;
   }
-  .jr-range-title{
-    font-size: 18px;
-    font-weight: 800;
-    margin:0;
-  }
-  .jr-range-grid{
-    display:flex;
-    align-items:flex-end;
-    gap: 22px;
-  }
+  .jr-range-title{ font-size: 18px; font-weight: 800; margin:0; }
+  .jr-range-grid{ display:flex; align-items:flex-end; gap: 22px; }
   .jr-range-label{
     font-size: 12px;
     color: rgba(255,255,255,.75);
     margin:0 0 2px 0;
   }
-  .jr-range-amt{
-    font-size: 34px;
-    font-weight: 900;
-    margin: 0;
-    line-height: 1.05;
-  }
-  .jr-range-unit{
-    font-size: 12px;
-    color: rgba(255,255,255,.75);
-    margin: 3px 0 0 0;
-  }
-  .jr-dash{
-    font-size: 26px;
-    color: rgba(255,255,255,.70);
-    margin: 0 2px;
-    padding-bottom: 12px;
-  }
+  .jr-range-amt{ font-size: 34px; font-weight: 900; margin: 0; line-height: 1.05; }
+  .jr-range-unit{ font-size: 12px; color: rgba(255,255,255,.75); margin: 3px 0 0 0; }
+  .jr-dash{ font-size: 26px; color: rgba(255,255,255,.70); margin: 0 2px; padding-bottom: 12px; }
 
   .jr-sources-card{
     background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
@@ -147,18 +131,11 @@ APP_CSS = """
     border-radius: 16px;
     padding: 16px 18px;
     box-shadow: var(--shadow);
+    margin-top: 14px;
   }
-  .jr-sources-title{
-    font-size: 18px;
-    font-weight: 800;
-    margin: 0 0 6px 0;
-    color: var(--text);
-  }
-  .jr-sources-sub{
-    color: var(--muted);
-    margin: 0 0 12px 0;
-    font-size: 13px;
-  }
+  .jr-sources-title{ font-size: 18px; font-weight: 800; margin: 0 0 6px 0; color: var(--text); }
+  .jr-sources-sub{ color: var(--muted); margin: 0 0 12px 0; font-size: 13px; }
+
   .jr-source{
     display:flex;
     gap: 12px;
@@ -170,10 +147,7 @@ APP_CSS = """
     text-decoration: none !important;
     margin-bottom: 10px;
   }
-  .jr-source:hover{
-    border-color: rgba(109,94,252,.55);
-    background: rgba(109,94,252,.08);
-  }
+  .jr-source:hover{ border-color: rgba(109,94,252,.55); background: rgba(109,94,252,.08); }
   .jr-source-ico{
     width: 22px;
     height: 22px;
@@ -185,13 +159,7 @@ APP_CSS = """
     flex: 0 0 auto;
     margin-top: 1px;
   }
-  .jr-source-main{
-    color: var(--text);
-    font-weight: 700;
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.2;
-  }
+  .jr-source-main{ color: var(--text); font-weight: 700; margin: 0; font-size: 13px; line-height: 1.2; }
   .jr-source-sub{
     color: var(--muted);
     margin: 3px 0 0 0;
@@ -245,7 +213,7 @@ st.markdown(APP_CSS, unsafe_allow_html=True)
 
 
 # ============================================================
-# HTTP helpers (additional edit 11: friendlier network handling)
+# HTTP helpers
 # ============================================================
 SESSION = requests.Session()
 SESSION.headers.update(
@@ -260,8 +228,25 @@ def http_get(url: str, *, timeout: int = 25, params: Optional[dict] = None) -> r
     return SESSION.get(url, timeout=timeout, params=params)
 
 
-def http_post(url: str, *, timeout: int = 25, json_body: Optional[dict] = None) -> requests.Response:
-    return SESSION.post(url, timeout=timeout, json=json_body)
+def http_post(url: str, *, timeout: int = 25, json_body: Optional[dict] = None, headers: Optional[dict] = None) -> requests.Response:
+    return SESSION.post(url, timeout=timeout, json=json_body, headers=headers)
+
+
+# ============================================================
+# Secrets/env helper (FIX for your 401)
+# Streamlit deployments often store keys in st.secrets, not os.environ.
+# This function checks BOTH.
+# ============================================================
+def require_secret_or_env(name: str) -> str:
+    v = (os.getenv(name, "") or "").strip()
+    if not v:
+        try:
+            v = str(st.secrets.get(name, "")).strip()
+        except Exception:
+            v = ""
+    if not v:
+        raise RuntimeError(f"Missing API key/config: {name}. Set it in Streamlit Secrets or environment variables.")
+    return v
 
 
 # ============================================================
@@ -286,13 +271,11 @@ def get_country_list() -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_states_for_country(country: str) -> List[str]:
-    # additional edit 12: robust try/except inside geo calls
     try:
         if not country:
             return ["N/A"]
         url = f"{COUNTRIESNOW_BASE}/countries/states"
-        payload = {"country": country}
-        r = http_post(url, json_body=payload, timeout=25)
+        r = http_post(url, json_body={"country": country}, timeout=25)
         if not r.ok:
             return ["N/A"]
         data = r.json()
@@ -309,15 +292,13 @@ def get_states_for_country(country: str) -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
-    # additional edit 12: robust try/except inside geo calls
     try:
         if not country:
             return ["N/A"]
 
         if not state or state == "N/A":
             url = f"{COUNTRIESNOW_BASE}/countries/cities"
-            payload = {"country": country}
-            r = http_post(url, json_body=payload, timeout=25)
+            r = http_post(url, json_body={"country": country}, timeout=25)
             if not r.ok:
                 return ["N/A"]
             data = r.json()
@@ -327,8 +308,7 @@ def get_cities(country: str, state: str) -> List[str]:
             return cities if cities else ["N/A"]
 
         url = f"{COUNTRIESNOW_BASE}/countries/state/cities"
-        payload = {"country": country, "state": state}
-        r = http_post(url, json_body=payload, timeout=25)
+        r = http_post(url, json_body={"country": country, "state": state}, timeout=25)
         if not r.ok:
             return ["N/A"]
         data = r.json()
@@ -366,23 +346,7 @@ def convert_from_usd(amount: float, to_ccy: str) -> float:
 # ============================================================
 # Helpers: URL label (Edit 7)
 # ============================================================
-def safe_host(url: str) -> str:
-    try:
-        from urllib.parse import urlparse
-
-        u = urlparse(url)
-        host = (u.hostname or "").strip().lower()
-        host = host.replace("www.", "")
-        return host or "source"
-    except Exception:
-        return "source"
-
-
 def pretty_url_label(raw_url: str) -> Tuple[str, str]:
-    """
-    Returns (host, readable tail).
-    Edit 7 improvement: if path slug is empty/ugly, use a friendly fallback.
-    """
     try:
         from urllib.parse import urlparse, unquote
 
@@ -396,14 +360,8 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
         cleaned = re.sub(r"[-_]+", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-        # Fallbacks
         if not cleaned or len(cleaned) < 6:
-            path = unquote(u.path or "").strip()
-            path = re.sub(r"\s+", " ", path)
-            if path and len(path) >= 6:
-                cleaned = path[:70]
-            else:
-                cleaned = "salary page"
+            cleaned = "salary page"
 
         return (host, cleaned[:70])
     except Exception:
@@ -414,11 +372,6 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
 # Edit 6: sanitize parsing helpers
 # ============================================================
 def parse_number_like(x: Any) -> Optional[float]:
-    """
-    Accepts numbers or strings like:
-      "120,000", "$120k", "120k", "120000", "85.5", "85/hr"
-    Returns float or None.
-    """
     if x is None:
         return None
     if isinstance(x, (int, float)) and math.isfinite(float(x)):
@@ -431,11 +384,9 @@ def parse_number_like(x: Any) -> Optional[float]:
     if not s:
         return None
 
-    # remove currency symbols / commas
     s = s.replace(",", "")
-    s = re.sub(r"[\$€£aedcadusd]", "", s, flags=re.I).strip()
+    s = re.sub(r"[\$€£]", "", s).strip()
 
-    # pull first numeric token
     m = re.search(r"(-?\d+(\.\d+)?)\s*([kKmM])?", s)
     if not m:
         return None
@@ -454,25 +405,15 @@ def parse_number_like(x: Any) -> Optional[float]:
 
 
 def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, float]:
-    """
-    Simple safety clamps to prevent nonsense.
-    You can tune these later.
-    """
     if pay_type == "HOURLY":
-        # clamp hourly to [1, 1000]
         min_v = max(1.0, min(min_v, 1000.0))
         max_v = max(1.0, min(max_v, 1500.0))
     else:
-        # annual clamp to [10k, 5M]
         min_v = max(10_000.0, min(min_v, 5_000_000.0))
         max_v = max(10_000.0, min(max_v, 7_500_000.0))
 
     if min_v > max_v:
         min_v, max_v = max_v, min_v
-
-    # ensure some separation if identical
-    if abs(max_v - min_v) < 1e-6:
-        max_v = min_v
 
     return min_v, max_v
 
@@ -494,28 +435,19 @@ def clean_urls(x: Any) -> List[str]:
 # ============================================================
 # AI logic (SerpAPI + OpenAI)
 # Edit 8: consistent pay_type mapping
-# Edit 9: prefer ~5 sources
+# Edit 9: prefer ~5 sources when possible
 # Edit 10: source strength 0-100
 # ============================================================
-def require_env(name: str) -> str:
-    v = os.getenv(name, "").strip()
-    if not v:
-        raise RuntimeError(f"Missing environment variable: {name}")
-    return v
-
-
 def rate_type_to_pay_type(rate_type: str) -> str:
-    # rate_type in app state: "hourly" or "salary"
     return "HOURLY" if (rate_type or "").strip().lower() == "hourly" else "ANNUAL"
 
 
 def pay_type_to_rate_type(pay_type: str) -> str:
-    # pay_type from model: "HOURLY" or "ANNUAL"
     return "hourly" if (pay_type or "").strip().upper() == "HOURLY" else "salary"
 
 
 def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
-    serp_key = require_env("SERPAPI_API_KEY")
+    serp_key = require_secret_or_env("SERPAPI_API_KEY")
 
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
     loc = ", ".join(location_bits) if location_bits else country
@@ -523,7 +455,7 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
     pay_type = rate_type_to_pay_type(rate_type)
     query = f'{job_title} salary range {loc} {"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
 
-    # Edit 9: fetch a bit more candidate links to help the model pick ~5 sources
+    # pull more candidates to enable ~5 strong sources
     params = {"engine": "google", "q": query, "api_key": serp_key, "num": 15}
 
     r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
@@ -536,7 +468,6 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
         if isinstance(link, str) and link.startswith(("http://", "https://")):
             urls.append(link)
 
-    # de-dupe preserving order
     seen = set()
     out: List[str] = []
     for u in urls:
@@ -557,7 +488,7 @@ def openai_estimate(
     rate_type: str,
     urls: List[str],
 ) -> Dict[str, Any]:
-    openai_key = require_env("OPENAI_API_KEY")
+    openai_key = require_secret_or_env("OPENAI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
 
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
@@ -565,9 +496,6 @@ def openai_estimate(
 
     url_block = "\n".join(f"- {u}" for u in urls[:12]) if urls else "- (no links found)"
 
-    # Edit 9 + 10:
-    # - ask for ~5 sources_used when possible
-    # - provide a 0-100 "strength" score per source
     prompt = f"""
 You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
 
@@ -603,35 +531,31 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 
 Rules:
 - min_usd must be <= max_usd and both realistic for the role/location.
-- Prefer returning ~5 strong sources when available. If the role/location is niche and you can only confidently return 2-3, that's fine.
+- Prefer returning ~5 strong sources when available. If you can only confidently return 2-3, that's fine.
 - Avoid low-quality or irrelevant sources.
-- strength is how strong the page is as a compensation source (0-100). Use higher scores for reputable salary aggregators, job boards with actual postings, and well-known compensation datasets.
+- strength is how strong the page is as a compensation source (0-100).
 - min_links and max_links: 0-4 each when possible.
-- sources_used should be a de-duplicated list of relied-upon links (may be empty).
+- sources_used should be a de-duplicated list of relied-upon links.
 """.strip()
 
+    # Responses API
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
     payload = {"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "input": prompt, "temperature": 0}
 
-    resp = http_post("https://api.openai.com/v1/responses", json_body=payload, timeout=60)
+    resp = http_post("https://api.openai.com/v1/responses", json_body=payload, timeout=60, headers=headers)
     resp.raise_for_status()
     data = resp.json()
 
-    # Extract output text
     text_out = ""
-    try:
-        for o in data.get("output", []) or []:
-            for c in o.get("content", []) or []:
-                if c.get("type") == "output_text":
-                    text_out += c.get("text", "")
-    except Exception:
-        text_out = ""
+    for o in data.get("output", []) or []:
+        for c in o.get("content", []) or []:
+            if c.get("type") == "output_text":
+                text_out += c.get("text", "")
 
     text_out = (text_out or "").strip()
     if not text_out:
         raise RuntimeError("OpenAI returned an empty response.")
 
-    # Parse JSON, with recovery
     try:
         parsed = json.loads(text_out)
     except Exception:
@@ -644,27 +568,19 @@ Rules:
     if pay_type_out not in ("HOURLY", "ANNUAL"):
         pay_type_out = pay_type
 
-    # Edit 6: sanitize min/max robustly
-    min_raw = parsed.get("min_usd")
-    max_raw = parsed.get("max_usd")
-    min_usd = parse_number_like(min_raw)
-    max_usd = parse_number_like(max_raw)
-
+    min_usd = parse_number_like(parsed.get("min_usd"))
+    max_usd = parse_number_like(parsed.get("max_usd"))
     if min_usd is None or max_usd is None:
         raise RuntimeError("OpenAI returned invalid min/max values.")
 
     min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
-    min_usd = round(min_usd)
-    max_usd = round(max_usd)
 
     sources_used = clean_urls(parsed.get("sources_used"))
     min_links = clean_urls(parsed.get("min_links"))
     max_links = clean_urls(parsed.get("max_links"))
 
-    # Normalize scored sources
     scored_sources: List[Dict[str, Any]] = []
     raw_sources = parsed.get("sources")
-
     if isinstance(raw_sources, list):
         for item in raw_sources:
             if not isinstance(item, dict):
@@ -672,27 +588,24 @@ Rules:
             url = item.get("url")
             if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
                 continue
+
             range_tag = str(item.get("range_tag") or "General").strip()
-            strength = item.get("strength")
-            strength_num = parse_number_like(strength) if not isinstance(strength, (int, float)) else float(strength)
+            if range_tag not in ("Min", "Max", "General"):
+                range_tag = "General"
+
+            strength_raw = item.get("strength")
+            strength_num = parse_number_like(str(strength_raw)) if not isinstance(strength_raw, (int, float)) else float(strength_raw)
             if strength_num is None:
                 strength_num = 50.0
             strength_int = int(max(0, min(100, round(strength_num))))
 
-            scored_sources.append(
-                {
-                    "url": url.strip(),
-                    "range_tag": range_tag if range_tag in ("Min", "Max", "General") else "General",
-                    "strength": strength_int,
-                }
-            )
+            scored_sources.append({"url": url.strip(), "range_tag": range_tag, "strength": strength_int})
 
-    # If model didn't provide scored sources, backfill from sources_used
     if not scored_sources and sources_used:
         for u in sources_used[:6]:
             scored_sources.append({"url": u, "range_tag": "General", "strength": 55})
 
-    # De-dupe scored sources by URL
+    # dedupe scored sources by URL
     seen = set()
     dedup_scored: List[Dict[str, Any]] = []
     for s in scored_sources:
@@ -703,8 +616,8 @@ Rules:
         dedup_scored.append(s)
 
     return {
-        "min_usd": int(min_usd),
-        "max_usd": int(max_usd),
+        "min_usd": int(round(min_usd)),
+        "max_usd": int(round(max_usd)),
         "pay_type": pay_type_out,
         "sources_used": sources_used,
         "min_links": min_links,
@@ -723,7 +636,7 @@ def init_state():
         "country": "",
         "state": "N/A",
         "city": "N/A",
-        "rate_type": "salary",  # "salary" or "hourly"
+        "rate_type": "salary",
         "currency": "USD",
         "last_result": None,
         "debug_last_error": None,
@@ -737,7 +650,7 @@ init_state()
 
 
 # ============================================================
-# Callbacks for dependent dropdowns
+# Callbacks
 # ============================================================
 def on_country_change():
     st.session_state["state"] = "N/A"
@@ -756,134 +669,110 @@ st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate inf
 
 
 # ============================================================
-# Form Card (no st.form so geo dropdowns refresh live)
+# Form card (FIXED layout)
+# We use a Streamlit container with border=True so everything is truly "in the box".
 # ============================================================
-st.markdown('<div class="jr-card">', unsafe_allow_html=True)
+with st.container(border=True):
+    st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
+    st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description here...", height=130)
 
-st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
-st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description here...", height=130)
+    uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
+    if uploaded is not None:
+        try:
+            text = uploaded.read().decode("utf-8", errors="ignore")
+            st.session_state["job_desc"] = text
+        except Exception:
+            pass
 
-uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
-if uploaded is not None:
     try:
-        text = uploaded.read().decode("utf-8", errors="ignore")
-        st.session_state["job_desc"] = text
+        countries = get_country_list()
     except Exception:
-        pass
+        countries = []
 
-# Country list
-try:
-    countries = get_country_list()
-except Exception:
-    countries = []
+    if not countries:
+        st.error("Could not load country list. Check your internet connection and try again.")
+        countries = ["(unavailable)"]
 
-if not countries:
-    st.error("Could not load country list. Check your internet connection and try again.")
-    countries = ["(unavailable)"]
+    country_options = [""] + countries if countries and countries[0] != "(unavailable)" else ["(unavailable)"]
 
-country_options = [""] + countries if countries and countries[0] != "(unavailable)" else ["(unavailable)"]
-
-st.selectbox(
-    "Country *",
-    options=country_options,
-    index=country_options.index(st.session_state["country"]) if st.session_state["country"] in country_options else 0,
-    key="country",
-    on_change=on_country_change,
-)
-
-# State options
-state_options = ["N/A"]
-if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
-    state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
-    if not state_options:
-        state_options = ["N/A"]
-
-if st.session_state["state"] not in state_options:
-    st.session_state["state"] = "N/A"
-
-# City options
-city_options = ["N/A"]
-if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
-    city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
-    if not city_options:
-        city_options = ["N/A"]
-
-if st.session_state["city"] not in city_options:
-    st.session_state["city"] = "N/A"
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
     st.selectbox(
-        "State/Province (optional)",
-        options=state_options,
-        index=state_options.index(st.session_state["state"]) if st.session_state["state"] in state_options else 0,
-        key="state",
-        on_change=on_state_change,
+        "Country *",
+        options=country_options,
+        index=country_options.index(st.session_state["country"]) if st.session_state["country"] in country_options else 0,
+        key="country",
+        on_change=on_country_change,
     )
 
-with c2:
-    # recompute cities after state changes (live rerun)
-    city_options = ["N/A"]
+    # states/cities
+    state_options = ["N/A"]
     if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
-        city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
-        if not city_options:
-            city_options = ["N/A"]
-    if st.session_state["city"] not in city_options:
-        st.session_state["city"] = "N/A"
+        state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
 
+    if st.session_state["state"] not in state_options:
+        st.session_state["state"] = "N/A"
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.selectbox(
+            "State/Province (optional)",
+            options=state_options,
+            index=state_options.index(st.session_state["state"]) if st.session_state["state"] in state_options else 0,
+            key="state",
+            on_change=on_state_change,
+        )
+
+    with c2:
+        city_options = ["N/A"]
+        if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
+            city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
+        if st.session_state["city"] not in city_options:
+            st.session_state["city"] = "N/A"
+
+        st.selectbox(
+            "City (optional)",
+            options=city_options,
+            index=city_options.index(st.session_state["city"]) if st.session_state["city"] in city_options else 0,
+            key="city",
+        )
+
+    with c3:
+        rate_type_label = st.radio(
+            "Rate Type *",
+            options=["Salary", "Hourly"],
+            index=0 if st.session_state["rate_type"] == "salary" else 1,
+            horizontal=True,
+            key="rate_type_radio",
+        )
+        st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
+
+    fx_rates = get_fx_table_usd()
+    currency_codes = sorted(fx_rates.keys())
     st.selectbox(
-        "City (optional)",
-        options=city_options,
-        index=city_options.index(st.session_state["city"]) if st.session_state["city"] in city_options else 0,
-        key="city",
+        "Currency *",
+        options=currency_codes,
+        index=currency_codes.index(st.session_state["currency"])
+        if st.session_state["currency"] in currency_codes
+        else currency_codes.index("USD"),
+        key="currency",
     )
 
-with c3:
-    # Edit 8: keep rate_type consistent
-    rate_type_label = st.radio(
-        "Rate Type *",
-        options=["Salary", "Hourly"],
-        index=0 if st.session_state["rate_type"] == "salary" else 1,
-        horizontal=True,
-        key="rate_type_radio",
-    )
-    st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
+    # Edit 3: disable button until valid
+    def is_valid() -> Tuple[bool, str]:
+        if not (st.session_state["job_title"] or "").strip():
+            return False, "Job Title is required."
+        if not (st.session_state["country"] or "").strip():
+            return False, "Country is required."
+        if st.session_state["country"] == "(unavailable)":
+            return False, "Country list is unavailable right now. Please try again."
+        if not (st.session_state["currency"] or "").strip():
+            return False, "Currency is required."
+        return True, ""
 
-# Currency
-fx_rates = get_fx_table_usd()
-currency_codes = sorted(fx_rates.keys())
-st.selectbox(
-    "Currency *",
-    options=currency_codes,
-    index=currency_codes.index(st.session_state["currency"])
-    if st.session_state["currency"] in currency_codes
-    else currency_codes.index("USD"),
-    key="currency",
-)
-
-# ============================================================
-# Edit 3: Disable button until valid
-# ============================================================
-def is_valid() -> Tuple[bool, str]:
-    if not (st.session_state["job_title"] or "").strip():
-        return False, "Job Title is required."
-    if not (st.session_state["country"] or "").strip():
-        return False, "Country is required."
-    if st.session_state["country"] == "(unavailable)":
-        return False, "Country list is unavailable right now. Please try again."
-    if not (st.session_state["currency"] or "").strip():
-        return False, "Currency is required."
-    return True, ""
-
-
-ok, msg = is_valid()
-submitted = st.button("Get Rates!", disabled=not ok)
-
-if not ok and msg:
-    st.caption(msg)
-
-st.markdown("</div>", unsafe_allow_html=True)
+    ok, msg = is_valid()
+    submitted = st.button("Get Rates!", disabled=not ok)
+    if not ok and msg:
+        st.caption(msg)
 
 
 # ============================================================
@@ -909,28 +798,28 @@ if submitted:
             max_usd = float(result["max_usd"])
             pay_type = str(result.get("pay_type", rate_type_to_pay_type(rate_type))).upper()
 
-            # Convert from USD for display
             min_disp = min_usd
             max_disp = max_usd
             if currency.upper() != "USD":
                 min_disp = convert_from_usd(min_usd, currency)
                 max_disp = convert_from_usd(max_usd, currency)
 
-            # Build sources (Edit 7 + 10)
-            min_links = result.get("min_links") or []
-            max_links = result.get("max_links") or []
+            # map strengths
             scored = result.get("scored_sources") or []
             score_map: Dict[str, int] = {}
-            range_map: Dict[str, str] = {}
-
+            tag_map: Dict[str, str] = {}
             for item in scored:
                 if isinstance(item, dict) and isinstance(item.get("url"), str):
                     u = item["url"].strip()
                     if u:
-                        score_map[u] = int(item.get("strength", 50))
-                        range_map[u] = str(item.get("range_tag", "General"))
+                        score_map[u] = int(item.get("strength", 55))
+                        tag_map[u] = str(item.get("range_tag", "General"))
 
+            # build sources list
             sources: List[Dict[str, Any]] = []
+            min_links = result.get("min_links") or []
+            max_links = result.get("max_links") or []
+            sources_used = result.get("sources_used") or []
 
             def add_source(u: str, rng: str):
                 host, slug = pretty_url_label(u)
@@ -943,12 +832,12 @@ if submitted:
             for u in max_links:
                 add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
 
-            # If min/max links missing, use scored sources to fill up (Edit 9: prefer more sources)
-            if len(sources) < 4 and scored:
+            # Edit 9: prefer ~5 sources (fill from scored or sources_used)
+            if len(sources) < 5:
                 for item in scored:
                     u = item.get("url")
                     if isinstance(u, str) and u.startswith(("http://", "https://")):
-                        tag = item.get("range_tag", "General")
+                        tag = tag_map.get(u, "General")
                         if tag == "Min":
                             rng = "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"
                         elif tag == "Max":
@@ -959,7 +848,13 @@ if submitted:
                         if len(sources) >= 6:
                             break
 
-            # De-dupe sources by URL
+            if len(sources) < 3:
+                for u in sources_used:
+                    add_source(u, "Source")
+                    if len(sources) >= 5:
+                        break
+
+            # dedupe
             seen = set()
             deduped: List[Dict[str, Any]] = []
             for s in sources:
@@ -973,12 +868,30 @@ if submitted:
                 "min": int(round(min_disp)),
                 "max": int(round(max_disp)),
                 "currency": currency.upper(),
-                "rateType": pay_type_to_rate_type(pay_type),  # Edit 8
+                "rateType": pay_type_to_rate_type(pay_type),
                 "sources": deduped[:8],
             }
 
+        except requests.HTTPError as e:
+            # If auth fails, show a targeted message
+            st.session_state["last_result"] = None
+            st.session_state["debug_last_error"] = repr(e)
+
+            msg = "Something went wrong while calculating the rate range. Please try again in a moment."
+            try:
+                status = e.response.status_code if e.response is not None else None
+            except Exception:
+                status = None
+
+            if status == 401:
+                msg = (
+                    "OpenAI authentication failed (401). "
+                    "Make sure OPENAI_API_KEY is set in Streamlit Secrets or environment variables, "
+                    "and that the key is valid."
+                )
+            st.error(msg)
+
         except Exception as e:
-            # Additional edit 11: user-friendly error, keep debug details hidden
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
             st.error("Something went wrong while calculating the rate range. Please try again in a moment.")
@@ -988,7 +901,6 @@ if submitted:
 # Render results
 # ============================================================
 res = st.session_state.get("last_result")
-
 if res:
     unit = "per hour" if res["rateType"] == "hourly" else "per year"
     cur = res["currency"]
@@ -1033,9 +945,9 @@ if res:
             title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
             url = (s.get("url") or "").replace('"', "%22")
             rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-            strength = s.get("strength", 55)
+
             try:
-                strength_i = int(max(0, min(100, int(strength))))
+                strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
             except Exception:
                 strength_i = 55
 
@@ -1064,7 +976,7 @@ if res:
     """
     st.markdown(sources_html, unsafe_allow_html=True)
 
-# Optional: hidden debug details (additional edit 11)
+# Debug details (optional)
 if st.session_state.get("debug_last_error"):
     with st.expander("Debug details", expanded=False):
         st.code(st.session_state["debug_last_error"])
