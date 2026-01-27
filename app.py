@@ -238,6 +238,7 @@ st.markdown(APP_CSS, unsafe_allow_html=True)
 # ============================================================
 COUNTRIESNOW_BASE = "https://countriesnow.space/api/v0.1"
 
+
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_country_list() -> List[str]:
     """
@@ -255,6 +256,7 @@ def get_country_list() -> List[str]:
             countries.append(name.strip())
     countries = sorted(set(countries), key=lambda x: x.lower())
     return countries
+
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_states_for_country(country: str) -> List[str]:
@@ -277,6 +279,7 @@ def get_states_for_country(country: str) -> List[str]:
             states.append(name.strip())
     states = sorted(set(states), key=lambda x: x.lower())
     return states if states else ["N/A"]
+
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
@@ -316,20 +319,19 @@ def get_cities(country: str, state: str) -> List[str]:
 # ============================================================
 # Helpers: FX conversion (free)
 # ============================================================
-_fx_cache: Dict[str, float] = {"USD": 1.0}
-
 @st.cache_data(ttl=60 * 60, show_spinner=False)
 def get_fx_table_usd() -> Dict[str, float]:
     r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=25)
     r.raise_for_status()
     data = r.json()
     rates = data.get("rates") or {}
-    out = {}
+    out: Dict[str, float] = {}
     for k, v in rates.items():
         if isinstance(k, str) and isinstance(v, (int, float)) and v and v > 0:
             out[k.upper()] = float(v)
     out["USD"] = 1.0
     return out
+
 
 def convert_from_usd(amount: float, to_ccy: str) -> float:
     to_ccy = (to_ccy or "USD").upper()
@@ -346,6 +348,7 @@ def convert_from_usd(amount: float, to_ccy: str) -> float:
 def pretty_url_label(raw_url: str) -> Tuple[str, str]:
     try:
         from urllib.parse import urlparse, unquote
+
         u = urlparse(raw_url)
         host = (u.hostname or "").replace("www.", "")
         parts = [p for p in (u.path or "").split("/") if p]
@@ -375,6 +378,7 @@ def require_env(name: str) -> str:
     if not v:
         raise RuntimeError(f"Missing environment variable: {name}")
     return v
+
 
 def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
     """
@@ -414,7 +418,16 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
 
     return out[:12]
 
-def openai_estimate(job_title: str, job_desc: str, country: str, state: str, city: str, rate_type: str, urls: List[str]) -> Dict[str, Any]:
+
+def openai_estimate(
+    job_title: str,
+    job_desc: str,
+    country: str,
+    state: str,
+    city: str,
+    rate_type: str,
+    urls: List[str],
+) -> Dict[str, Any]:
     """
     Calls OpenAI and returns a structured response:
       {
@@ -515,13 +528,13 @@ Rules:
     def clean_urls(x: Any) -> List[str]:
         if not isinstance(x, list):
             return []
-        out = []
-        seen = set()
+        out2: List[str] = []
+        seen2 = set()
         for item in x:
-            if isinstance(item, str) and item.startswith("http") and item not in seen:
-                seen.add(item)
-                out.append(item)
-        return out
+            if isinstance(item, str) and item.startswith("http") and item not in seen2:
+                seen2.add(item)
+                out2.append(item)
+        return out2
 
     sources_used = clean_urls(parsed.get("sources_used"))
     min_links = clean_urls(parsed.get("min_links"))
@@ -547,13 +560,14 @@ def init_state():
         "country": "",
         "state": "N/A",
         "city": "N/A",
-        "rate_type": "salary",
-        "currency": "USD",
+        "rate_type": "salary",   # selection default is OK; not an answer
+        "currency": "USD",       # selection default is OK; not an answer
         "last_result": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
 
 init_state()
 
@@ -562,7 +576,10 @@ init_state()
 # Header
 # ============================================================
 st.markdown('<div class="jr-title">Job Rate Finder</div>', unsafe_allow_html=True)
-st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>',
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -595,6 +612,7 @@ with st.form("job_rate_form", clear_on_submit=False):
         except Exception:
             pass
 
+    # Geo dropdowns
     try:
         countries = get_country_list()
     except Exception:
@@ -631,6 +649,7 @@ with st.form("job_rate_form", clear_on_submit=False):
         st.session_state["city"] = "N/A"
 
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st_state = st.selectbox(
             "State/Province (optional)",
@@ -686,6 +705,7 @@ def is_valid() -> Tuple[bool, str]:
         return False, "Currency is required."
     return True, ""
 
+
 if submitted:
     ok, msg = is_valid()
     if not ok:
@@ -722,10 +742,23 @@ if submitted:
 
                 for u in min_links:
                     host, slug = pretty_url_label(u)
-                    sources.append({"title": f"{host} — {slug}", "url": u, "range": "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"})
+                    sources.append(
+                        {
+                            "title": f"{host} — {slug}",
+                            "url": u,
+                            "range": "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)",
+                        }
+                    )
+
                 for u in max_links:
                     host, slug = pretty_url_label(u)
-                    sources.append({"title": f"{host} — {slug}", "url": u, "range": "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"})
+                    sources.append(
+                        {
+                            "title": f"{host} — {slug}",
+                            "url": u,
+                            "range": "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)",
+                        }
+                    )
 
                 if not sources:
                     for u in sources_used:
@@ -788,11 +821,14 @@ if res:
     st.markdown(range_html, unsafe_allow_html=True)
 
     sources: List[Dict[str, str]] = res.get("sources") or []
+
+    # IMPORTANT: sources_html must have NO lines starting with 4+ spaces,
+    # otherwise markdown can render them as a code block.
     sources_html = """
-    <div class="jr-sources-card">
-      <div class="jr-sources-title">Rate Justification Sources</div>
-      <div class="jr-sources-sub">The above rate range is based on data from the following industry sources:</div>
-    """
+<div class="jr-sources-card">
+  <div class="jr-sources-title">Rate Justification Sources</div>
+  <div class="jr-sources-sub">The above rate range is based on data from the following industry sources:</div>
+"""
 
     if not sources:
         sources_html += '<div style="color:var(--muted);font-size:13px;">No sources were returned confidently for this query.</div>'
@@ -802,7 +838,6 @@ if res:
             url = (s.get("url") or "").replace('"', "%22")
             rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
 
-            # IMPORTANT FIX: no leading indentation in HTML lines (prevents markdown code-block rendering)
             sources_html += f"""
 <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
   <div class="jr-source-ico">↗</div>
@@ -813,8 +848,9 @@ if res:
 </a>
 """
 
+    # NOTE FIX: also no indentation on this footer block
     sources_html += """
-      <div class="jr-note"><strong>Note:</strong> These rates are estimates based on aggregated market data. Actual compensation may vary based on experience, skills, company size, and other factors.</div>
-    </div>
-    """
+<div class="jr-note"><strong>Note:</strong> These rates are estimates based on aggregated market data. Actual compensation may vary based on experience, skills, company size, and other factors.</div>
+</div>
+"""
     st.markdown(sources_html, unsafe_allow_html=True)
