@@ -1,4 +1,3 @@
-# app.py
 from __future__ import annotations
 
 import os
@@ -277,6 +276,98 @@ def get_cities(country: str, state: str) -> List[str]:
 
 
 # ============================================================
+# Country metadata for improved international support
+# ============================================================
+COUNTRY_METADATA = {
+    "Brazil": {
+        "aliases": ["Brazil", "Brasil", "BR"],
+        "local_name": "Brasil",
+        "currency": "BRL",
+        "language": "Portuguese",
+        "salary_sites": ["vagas.com.br", "catho.com.br", "glassdoor.com.br"],
+    },
+    "United States": {
+        "aliases": ["United States", "USA", "US", "U.S.", "U.S.A.", "America"],
+        "local_name": "United States",
+        "currency": "USD",
+        "language": "English",
+        "salary_sites": [],
+    },
+    "United Kingdom": {
+        "aliases": ["United Kingdom", "UK", "U.K.", "Britain", "Great Britain"],
+        "local_name": "United Kingdom",
+        "currency": "GBP",
+        "language": "English",
+        "salary_sites": [],
+    },
+    "Germany": {
+        "aliases": ["Germany", "Deutschland", "DE"],
+        "local_name": "Deutschland",
+        "currency": "EUR",
+        "language": "German",
+        "salary_sites": ["stepstone.de", "gehalt.de"],
+    },
+    "France": {
+        "aliases": ["France", "FR"],
+        "local_name": "France",
+        "currency": "EUR",
+        "language": "French",
+        "salary_sites": [],
+    },
+    "Spain": {
+        "aliases": ["Spain", "España", "ES"],
+        "local_name": "España",
+        "currency": "EUR",
+        "language": "Spanish",
+        "salary_sites": [],
+    },
+    "Mexico": {
+        "aliases": ["Mexico", "México", "MX"],
+        "local_name": "México",
+        "currency": "MXN",
+        "language": "Spanish",
+        "salary_sites": ["occ.com.mx"],
+    },
+    "Canada": {
+        "aliases": ["Canada", "CA"],
+        "local_name": "Canada",
+        "currency": "CAD",
+        "language": "English",
+        "salary_sites": [],
+    },
+    "Australia": {
+        "aliases": ["Australia", "AU"],
+        "local_name": "Australia",
+        "currency": "AUD",
+        "language": "English",
+        "salary_sites": ["seek.com.au"],
+    },
+    "India": {
+        "aliases": ["India", "IN"],
+        "local_name": "India",
+        "currency": "INR",
+        "language": "English",
+        "salary_sites": ["naukri.com", "ambitionbox.com"],
+    },
+}
+
+
+def get_country_metadata(country: str) -> Dict[str, Any]:
+    """Get metadata for a country, including aliases and local names."""
+    for key, meta in COUNTRY_METADATA.items():
+        if country in meta["aliases"] or country == key:
+            return meta
+    # Default metadata
+    return {
+        "aliases": [country],
+        "local_name": country,
+        "currency": "USD",
+        "language": "English",
+        "salary_sites": [],
+    }
+
+
+# ============================================================
 # FX conversion
 # ============================================================
 @st.cache_data(ttl=60 * 60, show_spinner=False)
@@ -486,6 +577,15 @@ RELIABLE_HOST_HINTS = [
     "randstad.",
     "michaelpage.",
     "talent.com",
+    "vagas.com",  # Brazil
+    "catho.com",  # Brazil
+    "glassdoor.com.br",  # Brazil
+    "stepstone.",  # Germany
+    "gehalt.de",  # Germany
+    "seek.com",  # Australia
+    "naukri.com",  # India
+    "ambitionbox.com",  # India
+    "occ.com",  # Mexico
 ]
 
 BLOCKED_HOST_HINTS = [
@@ -521,28 +621,16 @@ def geo_priority(tag: str) -> int:
 
 
 # ============================================================
-# SerpAPI helpers (use snippet/title for geo checks)
+# SerpAPI helpers (IMPROVED geo checking)
 # ============================================================
 def serp_country_aliases(country: str) -> List[str]:
-    c = (country or "").strip()
-    if not c:
-        return []
-
-    aliases = {c}
-
-    cl = c.lower()
-    if cl in {"united states", "usa", "us", "u.s.", "u.s.a."}:
-        aliases |= {"United States", "USA", "US", "U.S."}
-    if cl in {"united kingdom", "uk", "u.k."}:
-        aliases |= {"United Kingdom", "UK", "U.K.", "Britain", "Great Britain"}
-    if cl in {"brazil"}:
-        aliases |= {"Brazil", "Brasil"}
-
-    # Keep it simple; you can add more later.
-    return sorted({a for a in aliases if a})
+    """Get all possible aliases for a country."""
+    meta = get_country_metadata(country)
+    return meta["aliases"]
 
 
 def text_contains_any(hay: str, needles: List[str]) -> bool:
+    """Check if any needle appears in the haystack (case-insensitive)."""
     h = norm_text(hay)
     for n in needles:
         if not n:
@@ -553,13 +641,33 @@ def text_contains_any(hay: str, needles: List[str]) -> bool:
 
 
 def geo_tag_from_serp(url: str, title: str, snippet: str, country: str, state: str, city: str) -> str:
-    # We want country ALWAYS if possible, but don't hard-fail on missing literal country string
-    # (because pages often omit it). If it doesn't show up, label Nearby/Unclear.
-
-    country_alias = serp_country_aliases(country)
+    """
+    Determine geographical relevance of a search result.
+    Now with improved international support.
+    """
+    country_aliases = serp_country_aliases(country)
     blob = " ".join([title or "", snippet or "", url or ""])
 
-    country_ok = text_contains_any(blob, country_alias) or url_contains_token(url, country)
+    # Check for country match (including local names)
+    country_ok = text_contains_any(blob, country_aliases) or url_contains_token(url, country)
+    
+    # For international sites, be more lenient if we see the job title + any location indicator
+    if not country_ok:
+        # Check if URL is from a country-specific domain
+        h = host_of(url)
+        meta = get_country_metadata(country)
+        local_currency = meta.get("currency", "")
+        
+        # Check for country TLD or local salary sites
+        for site in meta.get("salary_sites", []):
+            if site in h:
+                country_ok = True
+                break
+        
+        # Check for currency mentions (e.g., BRL for Brazil)
+        if local_currency and local_currency in blob.upper():
+            country_ok = True
+
     if not country_ok:
         return "Nearby/Unclear"
 
@@ -568,7 +676,6 @@ def geo_tag_from_serp(url: str, title: str, snippet: str, country: str, state: s
 
     if city:
         if text_contains_any(blob, [city]) or url_contains_token(url, city):
-            # city hit is strong
             return "Exact"
 
     if state:
@@ -599,14 +706,17 @@ def serpapi_search(
     experience_level: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    Returns candidate results as dicts:
-      {url, title, snippet, host, geo_tag, rel_boost}
+    Returns candidate results with IMPROVED international search.
     """
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
     hint = build_search_hint(job_desc, experience_level)
+    
+    meta = get_country_metadata(country)
+    local_name = meta.get("local_name", country)
+    local_currency = meta.get("currency", "USD")
 
-    # Query A: your manual style
+    # Query A: Standard English query
     q_a_parts = [job_title.strip()]
     if experience_level.strip():
         q_a_parts.append(experience_level.strip())
@@ -618,7 +728,7 @@ def serpapi_search(
     q_a_parts.append("salary")
     q_a = " ".join([p for p in q_a_parts if p]).strip()
 
-    # Query B: current style + hint
+    # Query B: With hints and explicit country
     q_b_parts = [job_title.strip()]
     if hint:
         q_b_parts.append(hint)
@@ -630,41 +740,84 @@ def serpapi_search(
         q_b_parts.append(f'"{city}"')
     q_b = " ".join([p for p in q_b_parts if p]).strip()
 
-    # Query C: SalaryExpert must-try (but we don’t force it to exist)
+    # Query C: SalaryExpert (still useful)
     q_c = f'site:salaryexpert.com "{job_title}" "{country}" salary'
 
-    queries = [q_a, q_b, q_c]
+    # Query D: LOCAL NAME + local currency (NEW - for Brazil, etc.)
+    q_d_parts = [job_title.strip()]
+    if local_name != country:
+        q_d_parts.append(f'"{local_name}"')
+    else:
+        q_d_parts.append(f'"{country}"')
+    q_d_parts.append("salário" if local_name == "Brasil" else "salary")
+    if local_currency != "USD":
+        q_d_parts.append(local_currency)
+    q_d = " ".join([p for p in q_d_parts if p]).strip()
+
+    # Query E: Local salary sites (NEW - for Brazil, etc.)
+    q_e = None
+    if meta.get("salary_sites"):
+        top_site = meta["salary_sites"][0]
+        q_e = f'site:{top_site} "{job_title}" salário' if local_name == "Brasil" else f'site:{top_site} "{job_title}" salary'
+
+    queries = [q_a, q_b, q_c, q_d]
+    if q_e:
+        queries.append(q_e)
 
     all_items: List[Dict[str, Any]] = []
     for q in queries:
-        params = {"engine": "google", "q": q, "api_key": serp_key, "num": 20, "tbs": "qdr:m3"}
-        r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
-        r.raise_for_status()
-        data = r.json()
+        try:
+            params = {"engine": "google", "q": q, "api_key": serp_key, "num": 20, "tbs": "qdr:m6"}
+            
+            # For non-English countries, use country-specific Google
+            if local_name != country and meta.get("language") != "English":
+                # Use country code for gl parameter
+                country_code = None
+                if country == "Brazil":
+                    country_code = "br"
+                elif country == "Germany":
+                    country_code = "de"
+                elif country == "France":
+                    country_code = "fr"
+                elif country == "Spain":
+                    country_code = "es"
+                elif country == "Mexico":
+                    country_code = "mx"
+                
+                if country_code:
+                    params["gl"] = country_code
+            
+            r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
+            r.raise_for_status()
+            data = r.json()
 
-        for item in (data.get("organic_results") or []):
-            link = item.get("link")
-            if not (isinstance(link, str) and link.startswith(("http://", "https://"))):
-                continue
-            if is_blocked_source(link):
-                continue
+            for item in (data.get("organic_results") or []):
+                link = item.get("link")
+                if not (isinstance(link, str) and link.startswith(("http://", "https://"))):
+                    continue
+                if is_blocked_source(link):
+                    continue
 
-            title = item.get("title") if isinstance(item.get("title"), str) else ""
-            snippet = item.get("snippet") if isinstance(item.get("snippet"), str) else ""
-            h = host_of(link)
-            geo = geo_tag_from_serp(link, title, snippet, country, state, city)
-            rel = reliability_boost(link)
+                title = item.get("title") if isinstance(item.get("title"), str) else ""
+                snippet = item.get("snippet") if isinstance(item.get("snippet"), str) else ""
+                h = host_of(link)
+                geo = geo_tag_from_serp(link, title, snippet, country, state, city)
+                rel = reliability_boost(link)
 
-            all_items.append(
-                {
-                    "url": link.strip(),
-                    "title": title.strip(),
-                    "snippet": snippet.strip(),
-                    "host": h,
-                    "geo_tag": geo,
-                    "rel_boost": rel,
-                }
-            )
+                all_items.append(
+                    {
+                        "url": link.strip(),
+                        "title": title.strip(),
+                        "snippet": snippet.strip(),
+                        "host": h,
+                        "geo_tag": geo,
+                        "rel_boost": rel,
+                    }
+                )
+        except Exception as e:
+            # Continue with other queries if one fails
+            st.warning(f"Search query failed: {str(e)[:100]}")
+            continue
 
     # Deduplicate by URL, keep the best scoring version
     best: Dict[str, Dict[str, Any]] = {}
@@ -680,8 +833,7 @@ def serpapi_search(
     dedup = list(best.values())
     dedup.sort(key=lambda x: int(x.get("_score", 0)), reverse=True)
 
-    # Return top candidates (more is okay; OpenAI will pick)
-    return dedup[:24]
+    return dedup[:30]  # Increased from 24 to give more options
 
 
 def openai_estimate(
@@ -696,6 +848,9 @@ def openai_estimate(
 ) -> Dict[str, Any]:
     openai_key = require_secret_or_env("OPENAI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
+    
+    meta = get_country_metadata(country)
+    local_currency = meta.get("currency", "USD")
 
     location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
@@ -705,12 +860,13 @@ def openai_estimate(
 
     # Give the model the URL + context so it can select correctly
     lines = []
-    for c in candidates[:14]:
+    for c in candidates[:18]:  # Increased from 14
         lines.append(
             f'- {c["url"]}\n  title: {c.get("title","")}\n  snippet: {c.get("snippet","")}\n  geo: {c.get("geo_tag","")}'
         )
     url_block = "\n".join(lines) if lines else "- (no links found)"
 
+    # IMPROVED PROMPT with currency awareness
     prompt = f"""
 You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
 
@@ -719,8 +875,15 @@ Task:
 - Job description (optional): "{job_desc or ""}"
 {exp_line}
 - Location: "{loc}"
+- Local currency: {local_currency} (but convert ALL estimates to USD)
 - Pay type: "{pay_type}" (HOURLY means hourly rate; ANNUAL means yearly salary)
-- Consider only listings/open postings within the last ~3 months (best effort).
+- Consider only listings/open postings within the last ~6 months (best effort).
+
+IMPORTANT FOR INTERNATIONAL LOCATIONS:
+- Sources may show salaries in {local_currency}, but you MUST convert to USD
+- Use approximate exchange rates if sources don't specify USD
+- Country-level matches are HIGHLY VALUABLE for international locations
+- Local salary sites (even if less famous) are MORE RELIABLE than global aggregators for {country}
 
 Use ONLY these candidate links (some may be irrelevant; pick only those that truly support the range):
 {url_block}
@@ -744,14 +907,16 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 
 Rules:
 - min_usd <= max_usd and both realistic for the role/location/experience.
-- Strongly prefer sources tagged geo: Exact or Country-level. Only use Nearby/Unclear if necessary.
-- Prefer reputable sources (SalaryExpert, Levels.fyi, Glassdoor, Indeed, Salary.com, Payscale, BuiltIn, ZipRecruiter, LinkedIn).
-- Try to return 5–8 strong sources if (and only if) there are 5–8 clearly relevant, reputable sources available.
-- Do NOT force a minimum number of sources.
-- Only include a source if it materially supports the range for this role + location.
-- Do NOT invent new URLs. ONLY choose from the provided candidate links.
-- strength is how strong the page is as a compensation source (0-100).
-- sources_used should be a de-duplicated list of relied-upon links.
+- ALL VALUES MUST BE IN USD (convert from {local_currency} if needed)
+- For {country}: Country-level matches are VALUABLE (don't penalize lack of city-specific data)
+- Prefer sources tagged geo: Exact or Country-level. Only use Nearby/Unclear if necessary.
+- For international locations, LOCAL salary sites are MORE RELIABLE than global aggregators
+- Try to return 5–8 strong sources if available, but quality over quantity
+- Do NOT force a minimum number of sources if good sources aren't available
+- Only include a source if it materially supports the range for this role + location
+- Do NOT invent new URLs. ONLY choose from the provided candidate links
+- strength is how strong the page is as a compensation source (0-100)
+- sources_used should be a de-duplicated list of relied-upon links
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -881,6 +1046,9 @@ init_state()
 def on_country_change():
     st.session_state["state"] = ""
     st.session_state["city"] = ""
+    # Auto-set currency based on country
+    meta = get_country_metadata(st.session_state["country"])
+    st.session_state["currency"] = meta.get("currency", "USD")
 
 
 def on_state_change():
@@ -1033,102 +1201,107 @@ if submitted:
                 job_desc=job_desc,
                 experience_level=experience_level,
             )
-            result = openai_estimate(
-                job_title,
-                job_desc,
-                experience_level,
-                country,
-                state,
-                city,
-                rate_type,
-                candidates,
-            )
+            
+            if not candidates:
+                st.warning(f"No salary data sources found for {job_title} in {country}. Try adjusting your search criteria or check if the job title is common in this location.")
+                st.session_state["last_result"] = None
+            else:
+                result = openai_estimate(
+                    job_title,
+                    job_desc,
+                    experience_level,
+                    country,
+                    state,
+                    city,
+                    rate_type,
+                    candidates,
+                )
 
-            min_usd = float(result["min_usd"])
-            max_usd = float(result["max_usd"])
-            pay_type = str(result.get("pay_type", rate_type_to_pay_type(rate_type))).upper()
+                min_usd = float(result["min_usd"])
+                max_usd = float(result["max_usd"])
+                pay_type = str(result.get("pay_type", rate_type_to_pay_type(rate_type))).upper()
 
-            min_disp = min_usd
-            max_disp = max_usd
-            if currency.upper() != "USD":
-                min_disp = convert_from_usd(min_usd, currency)
-                max_disp = convert_from_usd(max_usd, currency)
+                min_disp = min_usd
+                max_disp = max_usd
+                if currency.upper() != "USD":
+                    min_disp = convert_from_usd(min_usd, currency)
+                    max_disp = convert_from_usd(max_usd, currency)
 
-            # Build maps from candidate metadata (geo from SERP)
-            cand_map: Dict[str, Dict[str, Any]] = {c["url"]: c for c in candidates}
-            scored = result.get("scored_sources") or []
-            score_map: Dict[str, int] = {}
-            tag_map: Dict[str, str] = {}
-            for item in scored:
-                if isinstance(item, dict) and isinstance(item.get("url"), str):
-                    u = item["url"].strip()
-                    if u:
-                        score_map[u] = int(item.get("strength", 55))
-                        tag_map[u] = str(item.get("range_tag", "General"))
-
-            sources: List[Dict[str, Any]] = []
-            min_links = result.get("min_links") or []
-            max_links = result.get("max_links") or []
-            sources_used = result.get("sources_used") or []
-
-            def add_source(u: str, rng: str):
-                host, slug = pretty_url_label(u)
-                title = f"{host} — {slug}" if slug else host
-                strength = int(score_map.get(u, 55))
-                strength = int(max(0, min(100, strength + reliability_boost(u))))
-                geo = str(cand_map.get(u, {}).get("geo_tag", "Nearby/Unclear"))
-                sources.append({"title": title, "url": u, "range": rng, "strength": strength, "geo": geo})
-
-            for u in min_links:
-                add_source(u, "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)")
-            for u in max_links:
-                add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
-
-            if len(sources) < 5:
+                # Build maps from candidate metadata (geo from SERP)
+                cand_map: Dict[str, Dict[str, Any]] = {c["url"]: c for c in candidates}
+                scored = result.get("scored_sources") or []
+                score_map: Dict[str, int] = {}
+                tag_map: Dict[str, str] = {}
                 for item in scored:
-                    u = item.get("url")
-                    if isinstance(u, str) and u.startswith(("http://", "https://")) and not is_blocked_source(u):
-                        tag = tag_map.get(u, "General")
-                        if tag == "Min":
-                            rng = "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"
-                        elif tag == "Max":
-                            rng = "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"
-                        else:
-                            rng = "Source"
-                        add_source(u, rng)
-                        if len(sources) >= 12:
+                    if isinstance(item, dict) and isinstance(item.get("url"), str):
+                        u = item["url"].strip()
+                        if u:
+                            score_map[u] = int(item.get("strength", 55))
+                            tag_map[u] = str(item.get("range_tag", "General"))
+
+                sources: List[Dict[str, Any]] = []
+                min_links = result.get("min_links") or []
+                max_links = result.get("max_links") or []
+                sources_used = result.get("sources_used") or []
+
+                def add_source(u: str, rng: str):
+                    host, slug = pretty_url_label(u)
+                    title = f"{host} — {slug}" if slug else host
+                    strength = int(score_map.get(u, 55))
+                    strength = int(max(0, min(100, strength + reliability_boost(u))))
+                    geo = str(cand_map.get(u, {}).get("geo_tag", "Nearby/Unclear"))
+                    sources.append({"title": title, "url": u, "range": rng, "strength": strength, "geo": geo})
+
+                for u in min_links:
+                    add_source(u, "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)")
+                for u in max_links:
+                    add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
+
+                if len(sources) < 5:
+                    for item in scored:
+                        u = item.get("url")
+                        if isinstance(u, str) and u.startswith(("http://", "https://")) and not is_blocked_source(u):
+                            tag = tag_map.get(u, "General")
+                            if tag == "Min":
+                                rng = "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"
+                            elif tag == "Max":
+                                rng = "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"
+                            else:
+                                rng = "Source"
+                            add_source(u, rng)
+                            if len(sources) >= 12:
+                                break
+
+                if len(sources) < 3:
+                    for u in sources_used:
+                        if not is_blocked_source(u):
+                            add_source(u, "Source")
+                        if len(sources) >= 10:
                             break
 
-            if len(sources) < 3:
-                for u in sources_used:
-                    if not is_blocked_source(u):
-                        add_source(u, "Source")
-                    if len(sources) >= 10:
-                        break
+                # dedupe
+                seen = set()
+                deduped: List[Dict[str, Any]] = []
+                for s in sources:
+                    u = s.get("url")
+                    if not u or u in seen:
+                        continue
+                    seen.add(u)
+                    deduped.append(s)
 
-            # dedupe
-            seen = set()
-            deduped: List[Dict[str, Any]] = []
-            for s in sources:
-                u = s.get("url")
-                if not u or u in seen:
-                    continue
-                seen.add(u)
-                deduped.append(s)
+                # Sort: geo match first, then strength
+                deduped.sort(
+                    key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
+                    reverse=True,
+                )
 
-            # Sort: geo match first, then strength
-            deduped.sort(
-                key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
-                reverse=True,
-            )
-
-            st.session_state["last_result"] = {
-                "min": int(round(min_disp)),
-                "max": int(round(max_disp)),
-                "currency": currency.upper(),
-                "rateType": pay_type_to_rate_type(pay_type),
-                "sources": deduped[:12],
-            }
+                st.session_state["last_result"] = {
+                    "min": int(round(min_disp)),
+                    "max": int(round(max_disp)),
+                    "currency": currency.upper(),
+                    "rateType": pay_type_to_rate_type(pay_type),
+                    "sources": deduped[:12],
+                }
 
         except requests.HTTPError as e:
             st.session_state["last_result"] = None
@@ -1232,8 +1405,8 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> SalaryExpert is treated as a "must-try" search target, but the app will not fail
-              if no SalaryExpert result exists for a country/job.
+              <strong>Note:</strong> For international locations, country-level matches are valuable. 
+              The app searches both English and local-language sources when available.
             </div>
             """,
             unsafe_allow_html=True,
