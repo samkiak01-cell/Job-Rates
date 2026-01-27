@@ -477,14 +477,21 @@ def parse_number_like(x: Any) -> Optional[float]:
 
 def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, float]:
     if pay_type == "HOURLY":
-        min_v = max(1.0, min(min_v, 1000.0))
-        max_v = max(1.0, min(max_v, 1500.0))
+        min_v = max(5.0, min(min_v, 1000.0))
+        max_v = max(5.0, min(max_v, 1500.0))
     else:
-        min_v = max(10_000.0, min(min_v, 5_000_000.0))
-        max_v = max(10_000.0, min(max_v, 7_500_000.0))
+        # Lower floor to catch more international salaries
+        min_v = max(5_000.0, min(min_v, 10_000_000.0))
+        max_v = max(5_000.0, min(max_v, 10_000_000.0))
 
     if min_v > max_v:
         min_v, max_v = max_v, min_v
+    
+    # Safety check: if both are at floor, something went wrong
+    if pay_type != "HOURLY" and min_v == 5_000.0 and max_v == 5_000.0:
+        # Return placeholder that indicates error
+        return 0.0, 0.0
+    
     return min_v, max_v
 
 
@@ -929,14 +936,15 @@ CRITICAL INSTRUCTIONS:
 4. If experience level is "senior" or "5+ years", ignore junior/entry-level sources
 5. If experience level is "junior" or "entry-level", ignore senior sources
 6. Weight sources that mention similar skills/requirements MORE heavily
+7. RETURN ACTUAL NUMBERS - Example: if you see "$50,000 - $80,000", return min_usd: 50000, max_usd: 80000
 
 Available candidate sources (title and snippet show actual content):
 {url_block}
 
 Output STRICT JSON (no markdown, no commentary):
 {{
-  "min_usd": <number>,
-  "max_usd": <number>,
+  "min_usd": <number (e.g., 50000)>,
+  "max_usd": <number (e.g., 80000)>,
   "pay_type": "HOURLY"|"ANNUAL",
   "sources": [
     {{
@@ -953,7 +961,9 @@ Output STRICT JSON (no markdown, no commentary):
 
 Rules:
 - min_usd <= max_usd, realistic for {job_title} at {exp} level in {country}
-- ALL VALUES IN USD (convert from {local_currency} if needed)
+- RETURN ACTUAL NUMERIC VALUES (e.g., 50000, not "50K" or "$50,000")
+- ALL VALUES IN USD (convert from {local_currency} if needed using approximate rates)
+- If sources show {local_currency}, convert: BRL÷5=USD, EUR×1.1=USD, GBP×1.27=USD, INR÷83=USD
 - ONLY use sources where you can see salary data in the title/snippet
 - Experience level "{exp}" MUST affect the range (senior = higher, junior = lower)
 - "extracted_range" field proves you found actual data (e.g., "₹50K-80K/mo" or "$90K-120K annually")
@@ -962,6 +972,7 @@ Rules:
 - Quality over quantity: 3-6 strong sources better than 10 weak ones
 - DO NOT invent URLs - only use provided candidates
 - strength = how reliable this source is (0-100)
+- EXAMPLE VALID RESPONSE: {{"min_usd": 65000, "max_usd": 95000, "pay_type": "ANNUAL", ...}}
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -995,9 +1006,22 @@ Rules:
 
     min_usd = parse_number_like(parsed.get("min_usd"))
     max_usd = parse_number_like(parsed.get("max_usd"))
+    
+    # Debug: Show what AI returned
     if min_usd is None or max_usd is None:
-        raise RuntimeError("OpenAI returned invalid min/max values.")
+        error_msg = f"OpenAI returned invalid values: min={parsed.get('min_usd')}, max={parsed.get('max_usd')}"
+        raise RuntimeError(error_msg)
+    
+    # Debug: Check before clamping
+    if min_usd == 0 or max_usd == 0:
+        error_msg = f"OpenAI returned zero values: min={min_usd}, max={max_usd}. Raw response: {text_out[:500]}"
+        raise RuntimeError(error_msg)
+    
     min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
+    
+    # Check if clamping failed
+    if min_usd == 0 and max_usd == 0:
+        raise RuntimeError(f"Salary range validation failed - AI may not have found valid salary data in sources")
 
     urls = [c["url"] for c in candidates]
     cand_set = set(urls)
