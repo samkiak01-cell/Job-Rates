@@ -5,9 +5,7 @@ import os
 import re
 import math
 import json
-import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import requests
 import streamlit as st
@@ -46,10 +44,8 @@ APP_CSS = """
     color: var(--text);
   }
 
-  /* tighten default spacing */
   .block-container { padding-top: 2.1rem; padding-bottom: 2.5rem; max-width: 880px; }
 
-  /* header */
   .jr-title{
     text-align:center;
     margin-bottom: .35rem;
@@ -65,7 +61,6 @@ APP_CSS = """
     font-size: 15px;
   }
 
-  /* cards */
   .jr-card{
     background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
     border: 1px solid var(--border);
@@ -74,14 +69,7 @@ APP_CSS = """
     box-shadow: var(--shadow);
     backdrop-filter: blur(10px);
   }
-  .jr-card-inner{
-    background: rgba(0,0,0,.12);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 14px;
-  }
 
-  /* streamlit widgets */
   label, .st-emotion-cache-16idsys p, .stMarkdown p { color: var(--muted) !important; }
   .stTextInput input, .stTextArea textarea{
     background: rgba(0,0,0,.28) !important;
@@ -96,7 +84,6 @@ APP_CSS = """
     color: var(--text) !important;
   }
 
-  /* button */
   .stButton button, .stForm button{
     width: 100%;
     border: 0;
@@ -111,7 +98,6 @@ APP_CSS = """
     filter: brightness(1.05);
   }
 
-  /* results range card */
   .jr-range{
     background: linear-gradient(90deg, var(--accent), var(--accent2));
     border-radius: 16px;
@@ -159,7 +145,6 @@ APP_CSS = """
     padding-bottom: 12px;
   }
 
-  /* sources */
   .jr-sources-card{
     background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
     border: 1px solid var(--border);
@@ -226,7 +211,6 @@ APP_CSS = """
     font-size: 12px;
   }
 
-  /* remove streamlit header/footer */
   header, footer { visibility: hidden; }
 </style>
 """
@@ -241,29 +225,20 @@ COUNTRIESNOW_BASE = "https://countriesnow.space/api/v0.1"
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_country_list() -> List[str]:
-    """
-    Returns a list of country names using CountriesNow.
-    No API key required.
-    """
     url = f"{COUNTRIESNOW_BASE}/countries"
     r = requests.get(url, timeout=25)
     r.raise_for_status()
     data = r.json()
-    countries = []
+    countries: List[str] = []
     for item in (data.get("data") or []):
         name = item.get("country")
         if isinstance(name, str) and name.strip():
             countries.append(name.strip())
-    countries = sorted(set(countries), key=lambda x: x.lower())
-    return countries
+    return sorted(set(countries), key=lambda x: x.lower())
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_states_for_country(country: str) -> List[str]:
-    """
-    Returns states/provinces for a country using CountriesNow.
-    If none exist or API doesn't return any, returns ["N/A"].
-    """
     if not country:
         return ["N/A"]
     url = f"{COUNTRIESNOW_BASE}/countries/states"
@@ -272,7 +247,7 @@ def get_states_for_country(country: str) -> List[str]:
     if not r.ok:
         return ["N/A"]
     data = r.json()
-    states = []
+    states: List[str] = []
     for s in (data.get("data") or {}).get("states") or []:
         name = s.get("name")
         if isinstance(name, str) and name.strip():
@@ -283,12 +258,6 @@ def get_states_for_country(country: str) -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
-    """
-    Returns city list.
-    - If state == "N/A": fetch all cities in country (CountriesNow /countries/cities)
-    - Else: fetch cities in state (CountriesNow /countries/state/cities)
-    If none, returns ["N/A"].
-    """
     if not country:
         return ["N/A"]
 
@@ -335,11 +304,8 @@ def get_fx_table_usd() -> Dict[str, float]:
 
 def convert_from_usd(amount: float, to_ccy: str) -> float:
     to_ccy = (to_ccy or "USD").upper()
-    rates = get_fx_table_usd()
-    rate = rates.get(to_ccy)
-    if not rate:
-        return amount
-    return amount * rate
+    rate = get_fx_table_usd().get(to_ccy)
+    return amount if not rate else amount * rate
 
 
 # ============================================================
@@ -358,11 +324,7 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
         cleaned = re.sub(r"[-_]+", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-        if cleaned and len(cleaned) >= 6:
-            secondary = cleaned[:70]
-        else:
-            secondary = unquote(u.path or "")[:70].strip() or raw_url[:70]
-
+        secondary = cleaned[:70] if (cleaned and len(cleaned) >= 6) else (unquote(u.path or "")[:70].strip() or raw_url[:70])
         return (host or "Source", secondary)
     except Exception:
         return ("Source", raw_url)
@@ -370,8 +332,6 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
 
 # ============================================================
 # AI logic (SerpAPI + OpenAI)
-# - No hardcoded responses
-# - No prefilled form values
 # ============================================================
 def require_env(name: str) -> str:
     v = os.getenv(name, "").strip()
@@ -381,22 +341,13 @@ def require_env(name: str) -> str:
 
 
 def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
-    """
-    Uses SerpAPI to fetch recent job/salary listing pages.
-    Returns a de-duped list of URLs.
-    """
     serp_key = require_env("SERPAPI_API_KEY")
 
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
     loc = ", ".join(location_bits) if location_bits else country
 
     query = f'{job_title} salary range {loc} {"hourly rate" if rate_type=="hourly" else "annual salary"}'
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": serp_key,
-        "num": 10,
-    }
+    params = {"engine": "google", "q": query, "api_key": serp_key, "num": 10}
 
     r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
     r.raise_for_status()
@@ -409,7 +360,7 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
             urls.append(link)
 
     seen = set()
-    out = []
+    out: List[str] = []
     for u in urls:
         if u in seen:
             continue
@@ -428,24 +379,11 @@ def openai_estimate(
     rate_type: str,
     urls: List[str],
 ) -> Dict[str, Any]:
-    """
-    Calls OpenAI and returns a structured response:
-      {
-        "min_usd": number,
-        "max_usd": number,
-        "pay_type": "HOURLY"|"ANNUAL",
-        "sources_used": [url...],
-        "min_links": [url...],
-        "max_links": [url...],
-      }
-    """
     openai_key = require_env("OPENAI_API_KEY")
-
     pay_type = "HOURLY" if rate_type == "hourly" else "ANNUAL"
 
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
     loc = ", ".join(location_bits) if location_bits else country
-
     url_block = "\n".join(f"- {u}" for u in urls[:10]) if urls else "- (no links found)"
 
     prompt = f"""
@@ -479,28 +417,18 @@ Rules:
 - sources_used should be a de-duplicated list of all relied-upon links (may be empty).
 """.strip()
 
-    headers = {
-        "Authorization": f"Bearer {openai_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        "input": prompt,
-        "temperature": 0,
-    }
+    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+    payload = {"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "input": prompt, "temperature": 0}
 
     resp = requests.post("https://api.openai.com/v1/responses", headers=headers, json=payload, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
     text_out = ""
-    try:
-        for o in data.get("output", []):
-            for c in o.get("content", []):
-                if c.get("type") == "output_text":
-                    text_out += c.get("text", "")
-    except Exception:
-        text_out = ""
+    for o in data.get("output", []) or []:
+        for c in o.get("content", []) or []:
+            if c.get("type") == "output_text":
+                text_out += c.get("text", "")
 
     text_out = (text_out or "").strip()
     if not text_out:
@@ -536,22 +464,18 @@ Rules:
                 out2.append(item)
         return out2
 
-    sources_used = clean_urls(parsed.get("sources_used"))
-    min_links = clean_urls(parsed.get("min_links"))
-    max_links = clean_urls(parsed.get("max_links"))
-
     return {
         "min_usd": round(min_usd),
         "max_usd": round(max_usd),
         "pay_type": pay_type_out,
-        "sources_used": sources_used,
-        "min_links": min_links,
-        "max_links": max_links,
+        "sources_used": clean_urls(parsed.get("sources_used")),
+        "min_links": clean_urls(parsed.get("min_links")),
+        "max_links": clean_urls(parsed.get("max_links")),
     }
 
 
 # ============================================================
-# State init (NO prefilled answers)
+# State init
 # ============================================================
 def init_state():
     defaults = {
@@ -560,8 +484,8 @@ def init_state():
         "country": "",
         "state": "N/A",
         "city": "N/A",
-        "rate_type": "salary",   # selection default is OK; not an answer
-        "currency": "USD",       # selection default is OK; not an answer
+        "rate_type": "salary",
+        "currency": "USD",
         "last_result": None,
     }
     for k, v in defaults.items():
@@ -576,14 +500,11 @@ init_state()
 # Header
 # ============================================================
 st.markdown('<div class="jr-title">Job Rate Finder</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>', unsafe_allow_html=True)
 
 
 # ============================================================
-# Form Card
+# Form Card  (EDIT 1: exactly ONE wrapper open + ONE close)
 # ============================================================
 st.markdown('<div class="jr-card">', unsafe_allow_html=True)
 
@@ -612,7 +533,7 @@ with st.form("job_rate_form", clear_on_submit=False):
         except Exception:
             pass
 
-    # Geo dropdowns
+    # Country (full width)
     try:
         countries = get_country_list()
     except Exception:
@@ -630,23 +551,16 @@ with st.form("job_rate_form", clear_on_submit=False):
     )
     st.session_state["country"] = "" if country == "(unavailable)" else country
 
+    # (EDIT 2) State first -> update session -> THEN compute city list from the updated state
     state_options = ["N/A"]
     if st.session_state["country"]:
-        state_options = get_states_for_country(st.session_state["country"])
+        state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
         if not state_options:
             state_options = ["N/A"]
 
+    # If current state not in list, reset
     if st.session_state["state"] not in state_options:
         st.session_state["state"] = "N/A"
-
-    city_options = ["N/A"]
-    if st.session_state["country"]:
-        city_options = get_cities(st.session_state["country"], st.session_state["state"])
-        if not city_options:
-            city_options = ["N/A"]
-
-    if st.session_state["city"] not in city_options:
-        st.session_state["city"] = "N/A"
 
     c1, c2, c3 = st.columns(3)
 
@@ -658,6 +572,16 @@ with st.form("job_rate_form", clear_on_submit=False):
             key="state_select",
         )
         st.session_state["state"] = st_state
+
+    # NOW compute city options from the *current* state (fixes the lag)
+    city_options = ["N/A"]
+    if st.session_state["country"]:
+        city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
+        if not city_options:
+            city_options = ["N/A"]
+
+    if st.session_state["city"] not in city_options:
+        st.session_state["city"] = "N/A"
 
     with c2:
         st_city = st.selectbox(
@@ -690,7 +614,7 @@ with st.form("job_rate_form", clear_on_submit=False):
 
     submitted = st.form_submit_button("Get Rates!")
 
-st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)  # EDIT 1 close
 
 
 # ============================================================
@@ -742,23 +666,10 @@ if submitted:
 
                 for u in min_links:
                     host, slug = pretty_url_label(u)
-                    sources.append(
-                        {
-                            "title": f"{host} — {slug}",
-                            "url": u,
-                            "range": "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)",
-                        }
-                    )
-
+                    sources.append({"title": f"{host} — {slug}", "url": u, "range": "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"})
                 for u in max_links:
                     host, slug = pretty_url_label(u)
-                    sources.append(
-                        {
-                            "title": f"{host} — {slug}",
-                            "url": u,
-                            "range": "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)",
-                        }
-                    )
+                    sources.append({"title": f"{host} — {slug}", "url": u, "range": "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"})
 
                 if not sources:
                     for u in sources_used:
@@ -787,7 +698,7 @@ if submitted:
 
 
 # ============================================================
-# Render results (NO HTML shown as code; only markdown HTML blocks)
+# Render results
 # ============================================================
 res = st.session_state.get("last_result")
 
@@ -822,14 +733,11 @@ if res:
 
     sources: List[Dict[str, str]] = res.get("sources") or []
 
-    # IMPORTANT: sources_html must have NO lines starting with 4+ spaces,
-    # otherwise markdown can render them as a code block.
     sources_html = """
 <div class="jr-sources-card">
   <div class="jr-sources-title">Rate Justification Sources</div>
   <div class="jr-sources-sub">The above rate range is based on data from the following industry sources:</div>
 """
-
     if not sources:
         sources_html += '<div style="color:var(--muted);font-size:13px;">No sources were returned confidently for this query.</div>'
     else:
@@ -837,7 +745,6 @@ if res:
             title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
             url = (s.get("url") or "").replace('"', "%22")
             rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-
             sources_html += f"""
 <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
   <div class="jr-source-ico">↗</div>
@@ -848,7 +755,6 @@ if res:
 </a>
 """
 
-    # NOTE FIX: also no indentation on this footer block
     sources_html += """
 <div class="jr-note"><strong>Note:</strong> These rates are estimates based on aggregated market data. Actual compensation may vary based on experience, skills, company size, and other factors.</div>
 </div>
