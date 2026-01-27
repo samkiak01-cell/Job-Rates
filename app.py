@@ -19,7 +19,7 @@ st.set_page_config(page_title="Job Rate Finder", page_icon="💲", layout="cente
 
 
 # ============================================================
-# Styling (UI only)
+# Styling (keep your dark sleek UI)
 # ============================================================
 APP_CSS = """
 <style>
@@ -239,10 +239,6 @@ def safe_host(url: str) -> str:
 
 
 def prettify_url_label(url: str) -> str:
-    """
-    Make a short, readable label from a URL:
-    salary.com — marketing director salary (los angeles ca)
-    """
     host = safe_host(url)
     tail = ""
     try:
@@ -260,6 +256,80 @@ def prettify_url_label(url: str) -> str:
 
 def html_escape(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ============================================================
+# FIX: Sources parsing (prevents the “big code box”)
+# ============================================================
+def parse_source_blob(blob: Any, default_range: str = "Source") -> Optional[SourceItem]:
+    """
+    Accepts:
+      - dict {title,url,range}
+      - plain URL string
+      - HTML <a ... href="..."> ... Reported Range: X ... </a>
+    Returns clean SourceItem so we NEVER render raw HTML.
+    """
+    if blob is None:
+        return None
+
+    # already structured
+    if isinstance(blob, dict):
+        url = str(blob.get("url", "")).strip()
+        if not url:
+            return None
+        title = str(blob.get("title", "")).strip() or prettify_url_label(url)
+        rng = str(blob.get("range", "")).strip() or default_range
+        return SourceItem(title=title, url=url, range=rng)
+
+    # plain URL
+    if isinstance(blob, str) and blob.strip().lower().startswith(("http://", "https://")):
+        url = blob.strip()
+        return SourceItem(title=prettify_url_label(url), url=url, range=default_range)
+
+    # HTML anchor
+    if isinstance(blob, str) and "<a" in blob and "href=" in blob:
+        s = blob
+
+        href_match = re.search(r'href\s*=\s*"([^"]+)"', s, flags=re.I)
+        if not href_match:
+            href_match = re.search(r"href\s*=\s*'([^']+)'", s, flags=re.I)
+        url = href_match.group(1).strip() if href_match else ""
+        if not url:
+            return None
+
+        rr_match = re.search(r"Reported\s*Range:\s*([^<]+)", s, flags=re.I)
+        rng = rr_match.group(1).strip() if rr_match else default_range
+
+        # try to pull the “main” text if present
+        main_match = re.search(r'jr-source-main"\s*>\s*([^<]+)\s*<', s, flags=re.I)
+        title = main_match.group(1).strip() if main_match else prettify_url_label(url)
+
+        return SourceItem(title=title, url=url, range=rng)
+
+    return None
+
+
+def normalize_sources(raw_sources: Any) -> List[SourceItem]:
+    if not raw_sources:
+        return []
+    if not isinstance(raw_sources, list):
+        raw_sources = [raw_sources]
+
+    out: List[SourceItem] = []
+    for item in raw_sources:
+        parsed = parse_source_blob(item)
+        if parsed and parsed.url:
+            out.append(parsed)
+
+    # de-dupe by url
+    seen = set()
+    deduped: List[SourceItem] = []
+    for s in out:
+        if s.url in seen:
+            continue
+        seen.add(s.url)
+        deduped.append(s)
+    return deduped[:12]
 
 
 # ============================================================
@@ -303,10 +373,6 @@ def get_states_for_country(country: str) -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
-    """
-    - If state == "N/A": fetch all cities in country
-    - Else: fetch cities in state
-    """
     if not country:
         return ["N/A"]
 
@@ -358,7 +424,7 @@ def convert_from_usd(amount: float, to_ccy: str) -> float:
 
 
 # ============================================================
-# SerpAPI + OpenAI estimation (wired)
+# SerpAPI + OpenAI estimation (same wiring)
 # ============================================================
 def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
     serp_key = require_env("SERPAPI_API_KEY")
@@ -367,12 +433,7 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
     loc = ", ".join(location_bits) if location_bits else country
 
     query = f'{job_title} salary range {loc} {"hourly rate" if rate_type=="hourly" else "annual salary"}'
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": serp_key,
-        "num": 10,
-    }
+    params = {"engine": "google", "q": query, "api_key": serp_key, "num": 10}
 
     r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
     r.raise_for_status()
@@ -434,12 +495,6 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
   "min_links": [<url>, ...],
   "max_links": [<url>, ...]
 }}
-
-Rules:
-- min_usd must be <= max_usd and both realistic for the role/location.
-- Use only the links you actually relied on. If you are not confident, return fewer links.
-- Provide 0-3 links for min_links and 0-3 links for max_links when possible.
-- sources_used should be a de-duplicated list of all relied-upon links (may be empty).
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -459,7 +514,6 @@ Rules:
     if not text_out:
         raise RuntimeError("OpenAI returned an empty response.")
 
-    # Parse JSON safely
     try:
         parsed = json.loads(text_out)
     except Exception:
@@ -507,31 +561,26 @@ def estimate_job_rate(
     state: str,
     city: str,
     rate_type: str,
-    currency: str,
 ) -> Dict[str, Any]:
-    """
-    Fully wired: SerpAPI -> OpenAI -> returns USD min/max + links.
-    """
     urls = serpapi_search(job_title, country, state, city, rate_type)
-    result = openai_estimate(job_title, job_description, country, state, city, rate_type, urls)
-    return result
+    return openai_estimate(job_title, job_description, country, state, city, rate_type, urls)
 
 
 # ============================================================
-# State init (no prefilled answers)
+# State init (safe keys; no widget-key collisions)
 # ============================================================
 def init_state():
     defaults = {
         "job_title": "",
         "job_desc": "",
-        "country": "",
-        "state": "N/A",
-        "city": "N/A",
-        "rate_type": "salary",  # default selection is OK
-        "currency": "USD",      # default selection is OK
+        "country_val": "",
+        "state_val": "N/A",
+        "city_val": "N/A",
+        "rate_type_val": "salary",
+        "currency_val": "USD",
         "last_result": None,
-        "_prev_country": None,
-        "_prev_state": None,
+        "prev_country": None,
+        "prev_state": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -545,34 +594,33 @@ init_state()
 # Header
 # ============================================================
 st.markdown('<div class="jr-title">Job Rate Finder</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>', unsafe_allow_html=True)
 
 
 # ============================================================
-# Form
+# Form (WORKING: includes submit button; no session_state collisions)
 # ============================================================
 st.markdown('<div class="jr-card">', unsafe_allow_html=True)
 
 with st.form("job_rate_form", clear_on_submit=False):
     job_title = st.text_input(
         "Job Title *",
-        key="job_title",
+        value=st.session_state["job_title"],
         placeholder="e.g., Senior Software Engineer",
-        value=st.session_state["job_title"] or "",
+        key="job_title_input",
     )
+    st.session_state["job_title"] = job_title
 
     job_desc = st.text_area(
         "Job Description (optional)",
-        key="job_desc",
+        value=st.session_state["job_desc"],
         placeholder="Paste job description here or upload a file below...",
         height=130,
-        value=st.session_state["job_desc"] or "",
+        key="job_desc_input",
     )
+    st.session_state["job_desc"] = job_desc
 
-    uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
+    uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False, key="job_desc_file")
     if uploaded is not None:
         try:
             text = uploaded.read().decode("utf-8", errors="ignore")
@@ -581,7 +629,6 @@ with st.form("job_rate_form", clear_on_submit=False):
         except Exception:
             pass
 
-    # --- Geo dropdowns (fixed: resets on change; no free text) ---
     try:
         countries = get_country_list()
     except Exception:
@@ -593,90 +640,83 @@ with st.form("job_rate_form", clear_on_submit=False):
 
     c1, c2, c3 = st.columns(3)
 
+    # Country select (widget key is country_select; value stored in country_val)
     with c1:
         if countries[0] == "(unavailable)":
-            country = st.selectbox("Country *", options=["(unavailable)"], key="country")
-            st.session_state["country"] = ""
+            st.selectbox("Country *", options=["(unavailable)"], key="country_select")
+            country = ""
         else:
-            # keep existing selection if valid
-            if st.session_state["country"] not in countries:
-                st.session_state["country"] = ""
-            country = st.selectbox(
-                "Country *",
-                options=countries,
-                index=(countries.index(st.session_state["country"]) if st.session_state["country"] in countries else 0),
-                key="country",
-            )
-            st.session_state["country"] = country
+            if st.session_state["country_val"] not in countries:
+                st.session_state["country_val"] = countries[0]
+            idx = countries.index(st.session_state["country_val"]) if st.session_state["country_val"] in countries else 0
+            country = st.selectbox("Country *", options=countries, index=idx, key="country_select")
+        st.session_state["country_val"] = country
 
-    # Reset state/city if country changed
-    if st.session_state["country"] != st.session_state.get("_prev_country"):
-        st.session_state["_prev_country"] = st.session_state["country"]
-        st.session_state["state"] = "N/A"
-        st.session_state["city"] = "N/A"
+    # Reset dependent fields if country changed
+    if st.session_state["country_val"] != st.session_state["prev_country"]:
+        st.session_state["prev_country"] = st.session_state["country_val"]
+        st.session_state["state_val"] = "N/A"
+        st.session_state["city_val"] = "N/A"
+        st.session_state["prev_state"] = None
 
     # States
-    states = get_states_for_country(st.session_state["country"]) if st.session_state["country"] else ["N/A"]
+    states = get_states_for_country(st.session_state["country_val"]) if st.session_state["country_val"] else ["N/A"]
     if "N/A" not in states:
         states = ["N/A"] + states
-    if st.session_state["state"] not in states:
-        st.session_state["state"] = "N/A"
+    if st.session_state["state_val"] not in states:
+        st.session_state["state_val"] = "N/A"
 
     with c2:
         state = st.selectbox(
             "State/Province (optional)",
             options=states,
-            index=states.index(st.session_state["state"]),
-            key="state",
+            index=states.index(st.session_state["state_val"]),
+            key="state_select",
         )
-        st.session_state["state"] = state
+        st.session_state["state_val"] = state
 
     # Reset city if state changed
-    if st.session_state["state"] != st.session_state.get("_prev_state"):
-        st.session_state["_prev_state"] = st.session_state["state"]
-        st.session_state["city"] = "N/A"
+    if st.session_state["state_val"] != st.session_state["prev_state"]:
+        st.session_state["prev_state"] = st.session_state["state_val"]
+        st.session_state["city_val"] = "N/A"
 
     # Cities
-    cities = (
-        get_cities(st.session_state["country"], st.session_state["state"])
-        if st.session_state["country"]
-        else ["N/A"]
-    )
+    cities = get_cities(st.session_state["country_val"], st.session_state["state_val"]) if st.session_state["country_val"] else ["N/A"]
     if "N/A" not in cities:
         cities = ["N/A"] + cities
-    if st.session_state["city"] not in cities:
-        st.session_state["city"] = "N/A"
+    if st.session_state["city_val"] not in cities:
+        st.session_state["city_val"] = "N/A"
 
     with c3:
         city = st.selectbox(
             "City (optional)",
             options=cities,
-            index=cities.index(st.session_state["city"]),
-            key="city",
+            index=cities.index(st.session_state["city_val"]),
+            key="city_select",
         )
-        st.session_state["city"] = city
+        st.session_state["city_val"] = city
 
     rate_type_label = st.radio(
         "Rate Type *",
         options=["Salary", "Hourly"],
-        index=0 if st.session_state["rate_type"] == "salary" else 1,
+        index=0 if st.session_state["rate_type_val"] == "salary" else 1,
         horizontal=True,
-        key="rate_type",
+        key="rate_type_radio",
     )
-    st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
+    st.session_state["rate_type_val"] = "hourly" if rate_type_label == "Hourly" else "salary"
 
     fx_rates = get_fx_table_usd()
     currency_codes = sorted(fx_rates.keys())
-    if st.session_state["currency"] not in currency_codes:
-        st.session_state["currency"] = "USD"
+    if st.session_state["currency_val"] not in currency_codes:
+        st.session_state["currency_val"] = "USD"
 
     currency = st.selectbox(
         "Currency *",
         options=currency_codes,
-        index=currency_codes.index(st.session_state["currency"]),
-        key="currency",
+        index=currency_codes.index(st.session_state["currency_val"]),
+        key="currency_select",
     )
-    st.session_state["currency"] = currency
+    st.session_state["currency_val"] = currency
 
     submitted = st.form_submit_button("Get Rates!")
 
@@ -684,14 +724,14 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
-# Validate + Run
+# Run estimation
 # ============================================================
 def is_valid() -> Tuple[bool, str]:
     if not (st.session_state["job_title"] or "").strip():
         return False, "Job Title is required."
-    if not (st.session_state["country"] or "").strip():
+    if not (st.session_state["country_val"] or "").strip():
         return False, "Country is required."
-    if not (st.session_state["currency"] or "").strip():
+    if not (st.session_state["currency_val"] or "").strip():
         return False, "Currency is required."
     return True, ""
 
@@ -705,13 +745,12 @@ if submitted:
             try:
                 job_title = st.session_state["job_title"].strip()
                 job_desc = (st.session_state["job_desc"] or "").strip()
-                country = st.session_state["country"].strip()
-                state = (st.session_state["state"] or "N/A").strip()
-                city = (st.session_state["city"] or "N/A").strip()
-                rate_type = st.session_state["rate_type"]
-                currency = st.session_state["currency"]
+                country = st.session_state["country_val"].strip()
+                state = (st.session_state["state_val"] or "N/A").strip()
+                city = (st.session_state["city_val"] or "N/A").strip()
+                rate_type = st.session_state["rate_type_val"]
+                currency = st.session_state["currency_val"]
 
-                # send empty strings if N/A
                 state_send = "" if state == "N/A" else state
                 city_send = "" if city == "N/A" else city
 
@@ -722,7 +761,6 @@ if submitted:
                     state=state_send,
                     city=city_send,
                     rate_type=rate_type,
-                    currency=currency,
                 )
 
                 min_usd = float(result["min_usd"])
@@ -735,29 +773,32 @@ if submitted:
                     min_disp = convert_from_usd(min_usd, currency)
                     max_disp = convert_from_usd(max_usd, currency)
 
-                # Build sources (NO HTML blobs saved; only clean dicts)
-                sources: List[Dict[str, str]] = []
-                unit = "Min (Hourly)" if pay_type == "HOURLY" else "Min (Annual)"
-                for u in (result.get("min_links") or []):
-                    sources.append({"title": prettify_url_label(u), "url": u, "range": unit})
+                # Build clean sources (NO raw HTML stored)
+                sources: List[SourceItem] = []
 
-                unit = "Max (Hourly)" if pay_type == "HOURLY" else "Max (Annual)"
-                for u in (result.get("max_links") or []):
-                    sources.append({"title": prettify_url_label(u), "url": u, "range": unit})
+                if result.get("min_links"):
+                    rng = "Min (Hourly)" if pay_type == "HOURLY" else "Min (Annual)"
+                    for u in result["min_links"]:
+                        sources.append(SourceItem(title=prettify_url_label(u), url=u, range=rng))
+
+                if result.get("max_links"):
+                    rng = "Max (Hourly)" if pay_type == "HOURLY" else "Max (Annual)"
+                    for u in result["max_links"]:
+                        sources.append(SourceItem(title=prettify_url_label(u), url=u, range=rng))
 
                 if not sources:
+                    # fallback
                     for u in (result.get("sources_used") or []):
-                        sources.append({"title": prettify_url_label(u), "url": u, "range": "Source"})
+                        sources.append(SourceItem(title=prettify_url_label(u), url=u, range="Source"))
 
-                # de-dupe URLs
+                # de-dupe
                 seen = set()
                 deduped: List[Dict[str, str]] = []
                 for s in sources:
-                    u = s.get("url", "")
-                    if not u or u in seen:
+                    if not s.url or s.url in seen:
                         continue
-                    seen.add(u)
-                    deduped.append(s)
+                    seen.add(s.url)
+                    deduped.append({"title": s.title, "url": s.url, "range": s.range})
 
                 st.session_state["last_result"] = {
                     "min": int(round(min_disp)),
@@ -773,10 +814,9 @@ if submitted:
 
 
 # ============================================================
-# Render Results
+# Render results
 # ============================================================
 res = st.session_state.get("last_result")
-
 if res:
     unit = "per hour" if res["rateType"] == "hourly" else "per year"
     cur = res["currency"]
@@ -794,7 +834,7 @@ if res:
           <div class="jr-range">
             <div>
               <div class="jr-label">Minimum</div>
-              <div class="jr-money">{cur} {min_v:,}</div>
+              <div class="jr-money">{cur}{min_v:,}</div>
               <div class="jr-unit">{unit}</div>
             </div>
 
@@ -802,7 +842,7 @@ if res:
 
             <div>
               <div class="jr-label">Maximum</div>
-              <div class="jr-money">{cur} {max_v:,}</div>
+              <div class="jr-money">{cur}{max_v:,}</div>
               <div class="jr-unit">{unit}</div>
             </div>
           </div>
@@ -822,7 +862,10 @@ if res:
 
     sources = res.get("sources") or []
     if not sources:
-        st.markdown("<p style='color: rgba(203,213,225,0.75);'>No sources were returned confidently for this query.</p>", unsafe_allow_html=True)
+        st.markdown(
+            "<p style='color: rgba(203,213,225,0.75);'>No sources were returned confidently for this query.</p>",
+            unsafe_allow_html=True,
+        )
     else:
         for s in sources:
             title = html_escape(s.get("title", "Source"))
