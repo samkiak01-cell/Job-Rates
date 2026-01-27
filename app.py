@@ -12,7 +12,7 @@ import streamlit as st
 
 
 # ============================================================
-# Constants (previously magic numbers)
+# Constants
 # ============================================================
 MAX_CANDIDATES_FOR_AI = 18
 MAX_SEARCH_RESULTS = 30
@@ -20,6 +20,9 @@ MAX_SKILLS_TO_EXTRACT = 12
 DEFAULT_STRENGTH_SCORE = 55
 RELIABILITY_BOOST = 28
 MAX_SOURCES_TO_DISPLAY = 12
+
+# Hours per year (for hourly <-> annual conversion)
+HOURS_PER_YEAR = 2080  # 40 hours/week × 52 weeks
 
 
 # ============================================================
@@ -288,7 +291,7 @@ def get_cities(country: str, state: str) -> List[str]:
 
 
 # ============================================================
-# Country metadata for improved international support
+# Country metadata for international support
 # ============================================================
 COUNTRY_METADATA = {
     "Brazil": {
@@ -297,6 +300,8 @@ COUNTRY_METADATA = {
         "currency": "BRL",
         "language": "Portuguese",
         "salary_sites": ["vagas.com.br", "catho.com.br", "glassdoor.com.br"],
+        "salary_period": "monthly",  # Default salary period in this country
+        "months_per_year": 13,  # 13th month bonus
     },
     "United States": {
         "aliases": ["United States", "USA", "US", "U.S.", "U.S.A.", "America"],
@@ -304,6 +309,8 @@ COUNTRY_METADATA = {
         "currency": "USD",
         "language": "English",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "United Kingdom": {
         "aliases": ["United Kingdom", "UK", "U.K.", "Britain", "Great Britain"],
@@ -311,6 +318,8 @@ COUNTRY_METADATA = {
         "currency": "GBP",
         "language": "English",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "Germany": {
         "aliases": ["Germany", "Deutschland", "DE"],
@@ -318,6 +327,8 @@ COUNTRY_METADATA = {
         "currency": "EUR",
         "language": "German",
         "salary_sites": ["stepstone.de", "gehalt.de"],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "France": {
         "aliases": ["France", "FR"],
@@ -325,6 +336,8 @@ COUNTRY_METADATA = {
         "currency": "EUR",
         "language": "French",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "Spain": {
         "aliases": ["Spain", "España", "ES"],
@@ -332,6 +345,8 @@ COUNTRY_METADATA = {
         "currency": "EUR",
         "language": "Spanish",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 14,  # 14 payments common in Spain
     },
     "Mexico": {
         "aliases": ["Mexico", "México", "MX"],
@@ -339,6 +354,8 @@ COUNTRY_METADATA = {
         "currency": "MXN",
         "language": "Spanish",
         "salary_sites": ["occ.com.mx"],
+        "salary_period": "monthly",
+        "months_per_year": 12,
     },
     "Canada": {
         "aliases": ["Canada", "CA"],
@@ -346,6 +363,8 @@ COUNTRY_METADATA = {
         "currency": "CAD",
         "language": "English",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "Australia": {
         "aliases": ["Australia", "AU"],
@@ -353,6 +372,8 @@ COUNTRY_METADATA = {
         "currency": "AUD",
         "language": "English",
         "salary_sites": ["seek.com.au"],
+        "salary_period": "annual",
+        "months_per_year": 12,
     },
     "India": {
         "aliases": ["India", "IN"],
@@ -360,6 +381,26 @@ COUNTRY_METADATA = {
         "currency": "INR",
         "language": "English",
         "salary_sites": ["naukri.com", "ambitionbox.com"],
+        "salary_period": "annual",  # Usually LPA (Lakhs Per Annum)
+        "months_per_year": 12,
+    },
+    "Japan": {
+        "aliases": ["Japan", "JP", "日本"],
+        "local_name": "Japan",
+        "currency": "JPY",
+        "language": "Japanese",
+        "salary_sites": [],
+        "salary_period": "monthly",
+        "months_per_year": 12,
+    },
+    "Philippines": {
+        "aliases": ["Philippines", "PH"],
+        "local_name": "Philippines",
+        "currency": "PHP",
+        "language": "English",
+        "salary_sites": [],
+        "salary_period": "monthly",
+        "months_per_year": 13,
     },
 }
 
@@ -375,6 +416,8 @@ def get_country_metadata(country: str) -> Dict[str, Any]:
         "currency": "USD",
         "language": "English",
         "salary_sites": [],
+        "salary_period": "annual",
+        "months_per_year": 12,
     }
 
 
@@ -396,13 +439,14 @@ def get_fx_table_usd() -> Dict[str, float]:
 
 
 def convert_from_usd(amount: float, to_ccy: str) -> float:
+    """Convert USD to another currency."""
     to_ccy = (to_ccy or "USD").upper()
     rate = get_fx_table_usd().get(to_ccy)
     return amount if not rate else amount * rate
 
 
 def convert_to_usd(amount: float, from_ccy: str) -> float:
-    """Convert from a currency to USD using live rates."""
+    """Convert from a currency to USD."""
     from_ccy = (from_ccy or "USD").upper()
     if from_ccy == "USD":
         return amount
@@ -440,7 +484,6 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
 def host_of(url: str) -> str:
     try:
         from urllib.parse import urlparse
-
         return (urlparse(url).hostname or "").replace("www.", "").lower()
     except Exception:
         return ""
@@ -478,7 +521,7 @@ def parse_number_like(x: Any) -> Optional[float]:
         return None
 
     s = s.replace(",", "")
-    s = re.sub(r"[\$€£]", "", s).strip()
+    s = re.sub(r"[\$€£¥₹R\$]", "", s).strip()
 
     m = re.search(r"(-?\d+(\.\d+)?)\s*([kKmM])?", s)
     if not m:
@@ -498,7 +541,7 @@ def parse_number_like(x: Any) -> Optional[float]:
 
 
 def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, float]:
-    """Validate salary range without artificial limits."""
+    """Validate salary range."""
     if min_v <= 0 or max_v <= 0:
         return 0.0, 0.0
 
@@ -509,10 +552,14 @@ def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, flo
         min_v, max_v = max_v, min_v
 
     if pay_type == "HOURLY":
-        if min_v > 10000 or max_v > 10000:
+        # Hourly: $1 to $1000/hour is reasonable range
+        if min_v > 1000 or max_v > 1000:
             return 0.0, 0.0
+        if min_v < 1:
+            min_v = 1  # Minimum $1/hour
     else:
-        if min_v > 50_000_000 or max_v > 50_000_000:
+        # Annual: $1,000 to $10M/year is reasonable
+        if min_v > 10_000_000 or max_v > 10_000_000:
             return 0.0, 0.0
 
     return min_v, max_v
@@ -533,25 +580,22 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# Experience level normalization (NEW)
+# Experience level normalization
 # ============================================================
 EXPERIENCE_LEVELS = {
-    "entry": ["entry", "entry-level", "entry level", "junior", "jr", "graduate", "grad", "fresher", "0-2 years", "1-2 years", "0-1 years"],
-    "mid": ["mid", "mid-level", "mid level", "intermediate", "2-5 years", "3-5 years", "2-4 years", "3-4 years"],
-    "senior": ["senior", "sr", "experienced", "5+ years", "5-7 years", "5-10 years", "6+ years", "7+ years", "lead"],
-    "principal": ["principal", "staff", "architect", "10+ years", "8+ years", "director", "vp", "executive", "chief"]
+    "entry": ["entry", "entry-level", "entry level", "junior", "jr", "graduate", "grad", "fresher", "0-2 years", "1-2 years", "0-1 years", "trainee", "intern"],
+    "mid": ["mid", "mid-level", "mid level", "intermediate", "2-5 years", "3-5 years", "2-4 years", "3-4 years", "associate"],
+    "senior": ["senior", "sr", "experienced", "5+ years", "5-7 years", "5-10 years", "6+ years", "7+ years", "lead", "team lead"],
+    "principal": ["principal", "staff", "architect", "10+ years", "8+ years", "director", "vp", "executive", "chief", "head of", "manager"]
 }
 
 
 def normalize_experience_level(exp: str) -> Tuple[str, str]:
-    """
-    Normalize experience level to a standard category.
-    Returns (normalized_level, description) tuple.
-    """
+    """Normalize experience level to a standard category."""
     exp_lower = (exp or "").strip().lower()
     if not exp_lower:
         return ("mid", "Mid-level (default)")
-    
+
     for level, keywords in EXPERIENCE_LEVELS.items():
         for kw in keywords:
             if kw in exp_lower:
@@ -562,8 +606,7 @@ def normalize_experience_level(exp: str) -> Tuple[str, str]:
                     "principal": "Principal/Staff (10+ years)"
                 }
                 return (level, descriptions[level])
-    
-    # Try to extract years
+
     years_match = re.search(r'(\d+)\s*\+?\s*years?', exp_lower)
     if years_match:
         years = int(years_match.group(1))
@@ -575,35 +618,8 @@ def normalize_experience_level(exp: str) -> Tuple[str, str]:
             return ("senior", f"Senior ({years} years)")
         else:
             return ("principal", f"Principal ({years}+ years)")
-    
-    # Default to mid-level if we can't determine
+
     return ("mid", f"Mid-level (inferred from: {exp})")
-
-
-# ============================================================
-# Job description and experience parsing (IMPROVED)
-# ============================================================
-# Use tuple instead of set to maintain order
-SKILL_INDICATORS = (
-    # Tech - most common first
-    "python", "java", "javascript", "typescript", "react", "angular", "vue", "node",
-    "aws", "azure", "gcp", "docker", "kubernetes", "sql", "nosql", "mongodb", "postgres",
-    "api", "rest", "graphql", "microservices", "devops", "ci/cd", "git", "agile", "scrum",
-    # Design
-    "figma", "sketch", "adobe", "photoshop", "illustrator", "indesign", "xd",
-    "premiere", "ui", "ux", "wireframe", "prototype", "visual", "graphic",
-    # Business
-    "excel", "powerpoint", "tableau", "powerbi", "salesforce", "sap", "erp", "crm",
-    "analytics", "reporting", "forecasting", "budgeting", "finance", "accounting",
-    # Marketing
-    "seo", "sem", "ppc", "adwords", "content", "copywriting", "campaign", "brand",
-    # Engineering
-    "autocad", "solidworks", "revit", "cad", "civil", "mechanical", "electrical",
-    # Medical
-    "clinical", "patient", "medical", "healthcare", "nursing", "pharmacy", "hospital",
-    # Other
-    "management", "leadership", "strategy", "operations", "project", "product", "sales"
-)
 
 
 def extract_experience_from_job_desc(job_desc: str) -> Optional[str]:
@@ -611,24 +627,21 @@ def extract_experience_from_job_desc(job_desc: str) -> Optional[str]:
     desc = (job_desc or "").strip().lower()
     if not desc:
         return None
-    
-    # Look for explicit experience requirements
+
     exp_patterns = [
         r'(\d+)\s*\+?\s*years?\s+(?:of\s+)?experience',
         r'(?:minimum|at least|requires?)\s+(\d+)\s*\+?\s*years?',
         r'(\d+)\s*-\s*(\d+)\s*years?\s+(?:of\s+)?experience',
     ]
-    
+
     for pattern in exp_patterns:
         match = re.search(pattern, desc)
         if match:
             if match.lastindex == 2:
-                # Range like "3-5 years"
                 return f"{match.group(1)}-{match.group(2)} years"
             else:
                 return f"{match.group(1)}+ years"
-    
-    # Look for level keywords
+
     level_keywords = {
         "entry level": "Entry-level",
         "entry-level": "Entry-level",
@@ -640,16 +653,36 @@ def extract_experience_from_job_desc(job_desc: str) -> Optional[str]:
         "mid-level": "Mid-level",
         "mid level": "Mid-level",
     }
-    
+
     for keyword, level in level_keywords.items():
         if keyword in desc:
             return level
-    
+
     return None
 
 
+# ============================================================
+# Skills extraction
+# ============================================================
+SKILL_INDICATORS = (
+    "python", "java", "javascript", "typescript", "react", "angular", "vue", "node",
+    "aws", "azure", "gcp", "docker", "kubernetes", "sql", "nosql", "mongodb", "postgres",
+    "api", "rest", "graphql", "microservices", "devops", "ci/cd", "git", "agile", "scrum",
+    "figma", "sketch", "adobe", "photoshop", "illustrator", "indesign", "xd",
+    "premiere", "ui", "ux", "wireframe", "prototype", "visual", "graphic",
+    "excel", "powerpoint", "tableau", "powerbi", "salesforce", "sap", "erp", "crm",
+    "analytics", "reporting", "forecasting", "budgeting", "finance", "accounting",
+    "seo", "sem", "ppc", "adwords", "content", "copywriting", "campaign", "brand",
+    "autocad", "solidworks", "revit", "cad", "civil", "mechanical", "electrical",
+    "clinical", "patient", "medical", "healthcare", "nursing", "pharmacy", "hospital",
+    "management", "leadership", "strategy", "operations", "project", "product", "sales"
+)
+
+SKIP_ACRONYMS = {"HTTP", "WWW", "COM", "ORG", "NET", "HTML", "CSS", "URL", "PDF", "THE", "AND", "FOR", "USD", "BRL", "EUR", "GBP"}
+
+
 def extract_key_requirements(job_desc: str) -> List[str]:
-    """Extract key skills, technologies, and requirements from job description."""
+    """Extract key skills from job description."""
     desc = (job_desc or "").strip().lower()
     if not desc:
         return []
@@ -657,7 +690,6 @@ def extract_key_requirements(job_desc: str) -> List[str]:
     found_skills: List[str] = []
     seen: set = set()
 
-    # Find skills from our dictionary (now ordered)
     for skill in SKILL_INDICATORS:
         if skill in desc and skill not in seen:
             found_skills.append(skill)
@@ -665,13 +697,10 @@ def extract_key_requirements(job_desc: str) -> List[str]:
             if len(found_skills) >= MAX_SKILLS_TO_EXTRACT:
                 break
 
-    # Find capitalized acronyms/technologies (e.g., AWS, SQL, API)
-    # But filter out common non-skill acronyms
-    skip_acronyms = {"HTTP", "WWW", "COM", "ORG", "NET", "HTML", "CSS", "URL", "PDF", "THE", "AND", "FOR"}
     acronyms = re.findall(r'\b[A-Z]{2,6}\b', job_desc)
     for acro in acronyms:
         acro_lower = acro.lower()
-        if acro not in skip_acronyms and acro_lower not in seen and len(acro) >= 2:
+        if acro not in SKIP_ACRONYMS and acro_lower not in seen:
             found_skills.append(acro)
             seen.add(acro_lower)
             if len(found_skills) >= MAX_SKILLS_TO_EXTRACT:
@@ -683,15 +712,12 @@ def extract_key_requirements(job_desc: str) -> List[str]:
 def build_search_hint(job_desc: str, experience_level: str) -> str:
     """Build search hint from job description and experience level."""
     bits: List[str] = []
-
     exp = (experience_level or "").strip()
     if exp:
         bits.append(exp)
-
     requirements = extract_key_requirements(job_desc)
     if requirements:
         bits.extend(requirements[:6])
-
     return " ".join(bits).strip()
 
 
@@ -699,43 +725,16 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
 # Reliability + blocklists
 # ============================================================
 RELIABLE_HOST_HINTS = [
-    "salaryexpert.com",
-    "levels.fyi",
-    "glassdoor.com",
-    "indeed.com",
-    "salary.com",
-    "payscale.com",
-    "builtin.com",
-    "ziprecruiter.com",
-    "linkedin.com",
-    "hays.",
-    "roberthalf.",
-    "randstad.",
-    "michaelpage.",
-    "talent.com",
-    "vagas.com",
-    "catho.com",
-    "glassdoor.com.br",
-    "stepstone.",
-    "gehalt.de",
-    "seek.com",
-    "naukri.com",
-    "ambitionbox.com",
-    "occ.com",
+    "salaryexpert.com", "levels.fyi", "glassdoor.com", "indeed.com", "salary.com",
+    "payscale.com", "builtin.com", "ziprecruiter.com", "linkedin.com",
+    "hays.", "roberthalf.", "randstad.", "michaelpage.", "talent.com",
+    "vagas.com", "catho.com", "glassdoor.com.br", "stepstone.", "gehalt.de",
+    "seek.com", "naukri.com", "ambitionbox.com", "occ.com",
 ]
 
 BLOCKED_HOST_HINTS = [
-    "pinterest.",
-    "facebook.",
-    "instagram.",
-    "tiktok.",
-    "youtube.",
-    "reddit.",
-    "quora.",
-    "medium.",
-    "github.",
-    "wikipedia.",
-    "slideshare.",
+    "pinterest.", "facebook.", "instagram.", "tiktok.", "youtube.",
+    "reddit.", "quora.", "medium.", "github.", "wikipedia.", "slideshare.",
 ]
 
 
@@ -757,16 +756,14 @@ def geo_priority(tag: str) -> int:
 
 
 # ============================================================
-# SerpAPI helpers (IMPROVED geo checking)
+# SerpAPI geo helpers
 # ============================================================
 def serp_country_aliases(country: str) -> List[str]:
-    """Get all possible aliases for a country."""
     meta = get_country_metadata(country)
     return meta["aliases"]
 
 
 def text_contains_any(hay: str, needles: List[str]) -> bool:
-    """Check if any needle appears in the haystack (case-insensitive)."""
     h = norm_text(hay)
     for n in needles:
         if not n:
@@ -777,7 +774,6 @@ def text_contains_any(hay: str, needles: List[str]) -> bool:
 
 
 def geo_tag_from_serp(url: str, title: str, snippet: str, country: str, state: str, city: str) -> str:
-    """Determine geographical relevance of a search result."""
     country_aliases = serp_country_aliases(country)
     blob = " ".join([title or "", snippet or "", url or ""])
 
@@ -802,19 +798,17 @@ def geo_tag_from_serp(url: str, title: str, snippet: str, country: str, state: s
     if not state and not city:
         return "Country-level"
 
-    if city:
-        if text_contains_any(blob, [city]) or url_contains_token(url, city):
-            return "Exact"
+    if city and (text_contains_any(blob, [city]) or url_contains_token(url, city)):
+        return "Exact"
 
-    if state:
-        if text_contains_any(blob, [state]) or url_contains_token(url, state):
-            return "Exact"
+    if state and (text_contains_any(blob, [state]) or url_contains_token(url, state)):
+        return "Exact"
 
     return "Country-level"
 
 
 # ============================================================
-# AI logic
+# Rate type helpers
 # ============================================================
 def rate_type_to_pay_type(rate_type: str) -> str:
     return "HOURLY" if (rate_type or "").strip().lower() == "hourly" else "ANNUAL"
@@ -822,7 +816,17 @@ def rate_type_to_pay_type(rate_type: str) -> str:
 
 def pay_type_to_rate_type(pay_type: str) -> str:
     return "hourly" if (pay_type or "").strip().upper() == "HOURLY" else "salary"
-  
+
+
+def convert_hourly_to_annual(hourly: float) -> float:
+    """Convert hourly rate to annual salary."""
+    return hourly * HOURS_PER_YEAR
+
+
+def convert_annual_to_hourly(annual: float) -> float:
+    """Convert annual salary to hourly rate."""
+    return annual / HOURS_PER_YEAR
+
 def serpapi_search(
     job_title: str,
     country: str,
@@ -832,22 +836,21 @@ def serpapi_search(
     job_desc: str = "",
     experience_level: str = "",
 ) -> List[Dict[str, Any]]:
-    """Returns candidate results with IMPROVED international search."""
+    """Returns candidate results with international search support."""
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
-    
-    # Get effective experience level (from input or job desc)
+
     effective_exp = experience_level.strip()
     if not effective_exp:
         effective_exp = extract_experience_from_job_desc(job_desc) or ""
-    
+
     hint = build_search_hint(job_desc, effective_exp)
 
     meta = get_country_metadata(country)
     local_name = meta.get("local_name", country)
     local_currency = meta.get("currency", "USD")
 
-    # Query A: Standard English query + experience level
+    # Build multiple search queries
     q_a_parts = [job_title.strip()]
     if effective_exp:
         q_a_parts.append(effective_exp)
@@ -856,40 +859,35 @@ def serpapi_search(
         q_a_parts.append(state.strip())
     if city:
         q_a_parts.append(city.strip())
-    q_a_parts.append("salary")
+    q_a_parts.append("hourly rate" if pay_type == "HOURLY" else "salary")
     q_a = " ".join([p for p in q_a_parts if p]).strip()
 
-    # Query B: With job description hints
     q_b_parts = [job_title.strip()]
     if hint:
         q_b_parts.append(hint)
-    q_b_parts.append(f'salary range "{country}"')
+    q_b_parts.append(f'"{country}"')
     q_b_parts.append("hourly rate" if pay_type == "HOURLY" else "annual salary")
     if state:
         q_b_parts.append(f'"{state}"')
-    if city:
-        q_b_parts.append(f'"{city}"')
     q_b = " ".join([p for p in q_b_parts if p]).strip()
 
-    # Query C: SalaryExpert
-    q_c = f'site:salaryexpert.com "{job_title}" "{country}" salary'
+    q_c = f'site:salaryexpert.com "{job_title}" "{country}"'
 
-    # Query D: LOCAL NAME + local currency
     q_d_parts = [job_title.strip()]
     if local_name != country:
         q_d_parts.append(f'"{local_name}"')
     else:
         q_d_parts.append(f'"{country}"')
-    q_d_parts.append("salário" if local_name == "Brasil" else "salary")
-    if local_currency != "USD":
-        q_d_parts.append(local_currency)
+    if local_name == "Brasil":
+        q_d_parts.append("salário" if pay_type == "ANNUAL" else "valor hora")
+    else:
+        q_d_parts.append("salary" if pay_type == "ANNUAL" else "hourly rate")
     q_d = " ".join([p for p in q_d_parts if p]).strip()
 
-    # Query E: Local salary sites
     q_e = None
     if meta.get("salary_sites"):
         top_site = meta["salary_sites"][0]
-        q_e = f'site:{top_site} "{job_title}" salário' if local_name == "Brasil" else f'site:{top_site} "{job_title}" salary'
+        q_e = f'site:{top_site} "{job_title}"'
 
     queries = [q_a, q_b, q_c, q_d]
     if q_e:
@@ -901,20 +899,12 @@ def serpapi_search(
             params = {"engine": "google", "q": q, "api_key": serp_key, "num": 20, "tbs": "qdr:m6"}
 
             if local_name != country and meta.get("language") != "English":
-                country_code = None
-                if country == "Brazil":
-                    country_code = "br"
-                elif country == "Germany":
-                    country_code = "de"
-                elif country == "France":
-                    country_code = "fr"
-                elif country == "Spain":
-                    country_code = "es"
-                elif country == "Mexico":
-                    country_code = "mx"
-
-                if country_code:
-                    params["gl"] = country_code
+                country_codes = {
+                    "Brazil": "br", "Germany": "de", "France": "fr",
+                    "Spain": "es", "Mexico": "mx", "Japan": "jp"
+                }
+                if country in country_codes:
+                    params["gl"] = country_codes[country]
 
             r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
             r.raise_for_status()
@@ -933,34 +923,108 @@ def serpapi_search(
                 geo = geo_tag_from_serp(link, title, snippet, country, state, city)
                 rel = reliability_boost(link)
 
-                all_items.append(
-                    {
-                        "url": link.strip(),
-                        "title": title.strip(),
-                        "snippet": snippet.strip(),
-                        "host": h,
-                        "geo_tag": geo,
-                        "rel_boost": rel,
-                    }
-                )
+                all_items.append({
+                    "url": link.strip(),
+                    "title": title.strip(),
+                    "snippet": snippet.strip(),
+                    "host": h,
+                    "geo_tag": geo,
+                    "rel_boost": rel,
+                })
         except Exception:
             continue
 
-    # Deduplicate by URL, keep the best scoring version
+    # Deduplicate
     best: Dict[str, Dict[str, Any]] = {}
     for it in all_items:
         u = it["url"]
         score = geo_priority(it["geo_tag"]) * 100 + it["rel_boost"]
-        if u not in best:
+        if u not in best or score > int(best[u].get("_score", 0)):
             best[u] = {**it, "_score": score}
-        else:
-            if score > int(best[u].get("_score", 0)):
-                best[u] = {**it, "_score": score}
 
     dedup = list(best.values())
     dedup.sort(key=lambda x: int(x.get("_score", 0)), reverse=True)
 
     return dedup[:MAX_SEARCH_RESULTS]
+
+
+def get_salary_period_guidance(country: str, pay_type: str) -> str:
+    """Get country-specific guidance on salary periods."""
+    meta = get_country_metadata(country)
+    default_period = meta.get("salary_period", "annual")
+    months = meta.get("months_per_year", 12)
+    currency = meta.get("currency", "USD")
+
+    if pay_type == "HOURLY":
+        return f"""
+HOURLY RATE HANDLING:
+- User wants HOURLY rate in USD
+- Look for "/hour", "/hr", "per hour", "hourly", "an hour" indicators
+- If you only find annual salary, divide by {HOURS_PER_YEAR} to get hourly
+- If you only find monthly salary, divide by 173 (average hours/month) to get hourly
+- Return the HOURLY rate in min_usd and max_usd fields
+- Example: $80,000/year ÷ 2080 = $38.46/hour
+"""
+
+    # Annual salary guidance
+    if country == "Brazil":
+        return f"""
+BRAZIL SALARY HANDLING (CRITICAL):
+- Brazilian salaries are typically quoted as MONTHLY (mensal), not annual
+- Common format: "R$ 5.000" or "R$ 8.000 - R$ 15.000" - these are MONTHLY
+- Brazil has 13th month salary (décimo terceiro)
+- CONVERSION: Monthly × 13 = Annual in BRL, then ÷ 5 = USD
+- Example: R$ 8.000/month × 13 = R$ 104.000/year ÷ 5 = $20,800 USD/year
+- If source says "por mês", "mensal", "CLT" without "/year", it's MONTHLY
+- Typical Software Engineer range: R$ 5.000-25.000/month = $13,000-65,000 USD/year
+"""
+    elif country == "India":
+        return f"""
+INDIA SALARY HANDLING (CRITICAL):
+- Indian salaries often use "LPA" (Lakhs Per Annum) - this IS annual
+- 1 Lakh = 100,000 INR
+- "10 LPA" = 10,00,000 INR/year = ~$12,000 USD/year
+- If monthly, multiply by 12
+- Current rate: ~83 INR = 1 USD
+- Typical Software Engineer range: 5-30 LPA = $6,000-36,000 USD/year
+"""
+    elif country == "Mexico":
+        return f"""
+MEXICO SALARY HANDLING (CRITICAL):
+- Mexican salaries are often quoted MONTHLY
+- Look for "mensual", "al mes", "/mes" = MONTHLY
+- Look for "anual", "al año" = ANNUAL
+- If unclear, assume MONTHLY and multiply by 12
+- Current rate: ~17 MXN = 1 USD
+- Example: MXN 30,000/month × 12 = MXN 360,000/year ÷ 17 = $21,176 USD/year
+"""
+    elif country == "Japan":
+        return f"""
+JAPAN SALARY HANDLING:
+- Japanese salaries can be monthly (月給) or annual (年収)
+- Look for 万 (man) = 10,000 yen
+- "月給30万" = 300,000 yen/month × 12 = 3,600,000 yen/year
+- Current rate: ~150 JPY = 1 USD
+- Example: ¥5,000,000/year ÷ 150 = $33,333 USD/year
+"""
+    elif country in ["Germany", "France", "Spain", "United Kingdom"]:
+        return f"""
+EUROPEAN SALARY HANDLING:
+- Most European salaries are quoted ANNUALLY (gross)
+- Look for "pro Jahr", "per year", "annual", "brutto" = ANNUAL
+- Look for "pro Monat", "monthly" = MONTHLY (multiply by 12)
+- Spain often has 14 payments/year (multiply monthly by 14)
+- EUR to USD: multiply by ~1.08
+- GBP to USD: multiply by ~1.26
+"""
+    else:
+        return f"""
+SALARY PERIOD HANDLING:
+- Default assumption for {country}: {default_period} salary
+- If monthly: multiply by {months} to get annual
+- Convert to USD using current exchange rates
+- Look for period indicators: "/year", "annual", "p.a." vs "/month", "monthly"
+"""
 
 
 def openai_estimate(
@@ -973,6 +1037,7 @@ def openai_estimate(
     rate_type: str,
     candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    """Use AI to extract and normalize salary data from search results."""
     openai_key = require_secret_or_env("OPENAI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
 
@@ -982,121 +1047,119 @@ def openai_estimate(
     location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
-    # IMPROVED: Get effective experience level and normalize it
+    # Get experience level
     effective_exp = experience_level.strip()
     if not effective_exp:
         effective_exp = extract_experience_from_job_desc(job_desc) or ""
-    
+
     exp_normalized, exp_description = normalize_experience_level(effective_exp)
-    
-    # Build strong experience guidance for the AI
+
+    # Experience section
     if effective_exp:
         exp_section = f"""
-EXPERIENCE LEVEL (CRITICAL - MUST ADJUST SALARY ACCORDINGLY):
-- User specified: "{effective_exp}"
-- Normalized category: {exp_normalized.upper()}
-- Interpretation: {exp_description}
+EXPERIENCE LEVEL (MUST ADJUST SALARY):
+- Specified: "{effective_exp}"
+- Category: {exp_normalized.upper()} - {exp_description}
 
-SALARY ADJUSTMENT RULES (MUST FOLLOW):
-- ENTRY/JUNIOR: Use LOWER 25th percentile of salary ranges found
-- MID-LEVEL: Use MEDIAN/MIDDLE of salary ranges found  
-- SENIOR: Use UPPER 75th percentile of salary ranges found
-- PRINCIPAL/STAFF: Use TOP of salary ranges, add 15-25% premium
-
-You MUST adjust the min_usd and max_usd based on experience level.
-A senior role should NOT return entry-level salaries!
+ADJUSTMENT RULES:
+- ENTRY/JUNIOR: Use lower 25th percentile
+- MID-LEVEL: Use median/middle
+- SENIOR: Use upper 75th percentile  
+- PRINCIPAL/STAFF: Use top of range + 15-25%
 """
     else:
         exp_section = """
-EXPERIENCE LEVEL: Not specified - default to MID-LEVEL
-- Use median salary ranges from sources
-- If sources show wide ranges, use the middle portion
+EXPERIENCE LEVEL: Not specified - use MID-LEVEL (median values)
 """
 
-    # Extract key requirements for better context
+    # Requirements
     requirements = extract_key_requirements(job_desc)
-    req_line = f'- Key skills/requirements: {", ".join(requirements[:8])}' if requirements else ''
+    req_line = f'- Skills: {", ".join(requirements[:8])}' if requirements else ''
 
-    # Build source list
+    # Source list
     lines = []
     for c in candidates[:MAX_CANDIDATES_FOR_AI]:
-        lines.append(
-            f'- {c["url"]}\n  title: {c.get("title","")}\n  snippet: {c.get("snippet","")}\n  geo: {c.get("geo_tag","")}'
-        )
-    url_block = "\n".join(lines) if lines else "- (no links found)"
+        lines.append(f'- {c["url"]}\n  title: {c.get("title","")}\n  snippet: {c.get("snippet","")}')
+    url_block = "\n".join(lines) if lines else "- (no sources found)"
 
-    # IMPROVED PROMPT with strong experience level handling
-    prompt = f"""You are a salary research analyst. Extract salary data from the provided sources.
+    # Get salary period guidance
+    period_guidance = get_salary_period_guidance(country, pay_type)
 
-JOB DETAILS:
-- Job title: "{job_title}"
-- Location: "{loc}"
-- Local currency: {local_currency}
-- Pay type: "{pay_type}" (HOURLY = hourly rate; ANNUAL = yearly salary)
+    # Build the prompt
+    output_unit = "HOURLY rate" if pay_type == "HOURLY" else "ANNUAL salary"
+    
+    prompt = f"""You are a salary analyst. Extract salary data from web search results.
+
+JOB: "{job_title}"
+LOCATION: "{loc}"
+LOCAL CURRENCY: {local_currency}
+REQUESTED OUTPUT: {output_unit} in USD
 {req_line}
 
 {exp_section}
 
-INSTRUCTIONS:
-1. Look for salary numbers in the titles and snippets below
-2. If you see explicit numbers (e.g., "$50K-80K", "R$5000-8000"), extract them
-3. CRITICAL: Adjust the range based on experience level as specified above
-4. Convert ALL values to USD before returning
-5. Tag each source as supporting "Min", "Max", or "General" range
+{period_guidance}
 
-CURRENCY CONVERSION (use current approximate rates):
-- BRL to USD: divide by 5
-- EUR to USD: multiply by 1.08  
-- GBP to USD: multiply by 1.26
-- INR to USD: divide by 83
-- MXN to USD: divide by 17
-- AUD to USD: multiply by 0.65
-- CAD to USD: multiply by 0.74
+CURRENCY CONVERSION (to USD):
+- BRL: ÷ 5.0
+- EUR: × 1.08
+- GBP: × 1.26
+- INR: ÷ 83
+- MXN: ÷ 17
+- JPY: ÷ 150
+- AUD: × 0.65
+- CAD: × 0.74
+- PHP: ÷ 56
 
-AVAILABLE SOURCES:
+SOURCES:
 {url_block}
 
-OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
+TASK:
+1. Find salary numbers in the sources above
+2. Determine if each is hourly, monthly, or annual
+3. Convert everything to {output_unit} in USD
+4. Adjust for {exp_normalized} experience level
+
+OUTPUT JSON (no markdown):
 {{
-  "min_usd": <number - MUST be appropriate for {exp_normalized} level>,
-  "max_usd": <number - MUST be appropriate for {exp_normalized} level>,
-  "pay_type": "HOURLY"|"ANNUAL",
-  "experience_adjustment": "<explain how you adjusted for {exp_normalized} level>",
+  "min_usd": <number - {output_unit} in USD>,
+  "max_usd": <number - {output_unit} in USD>,
+  "pay_type": "{pay_type}",
+  "conversion_notes": "<explain what you found and how you converted>",
   "sources": [
     {{
       "url": "<url>",
       "range_tag": "Min"|"Max"|"General",
       "strength": <0-100>,
-      "extracted_range": "<what salary data you found>"
+      "original_value": "<exact value found, e.g. 'R$ 8.000/month'>",
+      "converted_usd": <final {output_unit} USD>
     }}
   ],
-  "sources_used": ["<url1>", "<url2>"],
-  "min_links": ["<urls supporting minimum>"],
-  "max_links": ["<urls supporting maximum>"]
+  "sources_used": ["<urls>"],
+  "min_links": ["<urls for minimum>"],
+  "max_links": ["<urls for maximum>"]
 }}
 
-VALIDATION:
-- min_usd and max_usd must be positive numbers
-- min_usd must be less than max_usd
-- Values must reflect {exp_normalized.upper()} level pay, not generic ranges
-- Include "experience_adjustment" explaining your adjustment
+SANITY CHECK:
+- {"Hourly rates typically: $10-$300/hour for professional roles" if pay_type == "HOURLY" else "Annual salaries typically: $15,000-$500,000 for professional roles"}
+- If your result seems too low, you probably have monthly values - convert to annual first!
+- Brazil mid-level engineer: {"$10-40/hour" if pay_type == "HOURLY" else "$20,000-50,000/year"}
+- USA mid-level engineer: {"$40-80/hour" if pay_type == "HOURLY" else "$80,000-150,000/year"}
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-    
-    # FIXED: Use correct chat completions endpoint and format
+
     payload = {
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "max_tokens": 2000
+        "max_tokens": 2500
     }
 
     resp = http_post("https://api.openai.com/v1/chat/completions", json_body=payload, timeout=60, headers=headers)
     resp.raise_for_status()
     data = resp.json()
 
-    # FIXED: Parse response from chat completions format
     text_out = ""
     choices = data.get("choices", [])
     if choices:
@@ -1108,7 +1171,7 @@ VALIDATION:
 
     raw_ai_response = text_out
 
-    # Clean up JSON if wrapped in markdown
+    # Clean markdown formatting
     if text_out.startswith("```"):
         text_out = re.sub(r'^```(?:json)?\s*', '', text_out)
         text_out = re.sub(r'\s*```$', '', text_out)
@@ -1118,7 +1181,7 @@ VALIDATION:
     except Exception:
         m = re.search(r"\{.*\}", text_out, re.S)
         if not m:
-            raise RuntimeError(f"OpenAI did not return valid JSON. Response: {text_out[:500]}")
+            raise RuntimeError(f"Invalid JSON from AI: {text_out[:500]}")
         parsed = json.loads(m.group(0))
 
     pay_type_out = str(parsed.get("pay_type") or pay_type).upper()
@@ -1129,12 +1192,32 @@ VALIDATION:
     max_usd = parse_number_like(parsed.get("max_usd"))
 
     if min_usd is None or max_usd is None:
-        error_msg = f"OpenAI returned invalid values: min={parsed.get('min_usd')}, max={parsed.get('max_usd')}\n\nFull response: {raw_ai_response[:1000]}"
-        raise RuntimeError(error_msg)
+        raise RuntimeError(f"Invalid values from AI: min={parsed.get('min_usd')}, max={parsed.get('max_usd')}")
 
     if min_usd <= 0 or max_usd <= 0:
-        error_msg = f"OpenAI returned zero/negative values: min={min_usd}, max={max_usd}.\n\nFull AI response: {raw_ai_response[:1000]}"
-        raise RuntimeError(error_msg)
+        raise RuntimeError(f"Zero/negative values: min={min_usd}, max={max_usd}")
+
+    # Sanity check and auto-correct
+    if pay_type_out == "ANNUAL":
+        # Annual salary sanity check
+        if max_usd < 10000:
+            # Suspiciously low - probably monthly values, multiply by 12
+            min_usd = min_usd * 12
+            max_usd = max_usd * 12
+        elif max_usd < 15000 and country in ["United States", "United Kingdom", "Germany", "Canada", "Australia"]:
+            # Still too low for developed countries
+            min_usd = min_usd * 12
+            max_usd = max_usd * 12
+    elif pay_type_out == "HOURLY":
+        # Hourly rate sanity check
+        if max_usd > 500:
+            # Probably annual values, convert to hourly
+            min_usd = min_usd / HOURS_PER_YEAR
+            max_usd = max_usd / HOURS_PER_YEAR
+        elif max_usd < 1 and min_usd < 1:
+            # Probably some weird format, try multiplying
+            min_usd = min_usd * 100
+            max_usd = max_usd * 100
 
     original_min = min_usd
     original_max = max_usd
@@ -1142,20 +1225,15 @@ VALIDATION:
     min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
 
     if min_usd == 0 and max_usd == 0:
-        raise RuntimeError(f"AI returned invalid values (min={original_min}, max={original_max}). Try a more common job title.\n\nAI response: {raw_ai_response[:800]}")
+        raise RuntimeError(f"Invalid final values (min={original_min}, max={original_max})")
 
+    # Process sources
     urls = [c["url"] for c in candidates]
     cand_set = set(urls)
 
     def only_candidates(xs: Any) -> List[str]:
         xs2 = clean_urls(xs)
-        out: List[str] = []
-        seen = set()
-        for u in xs2:
-            if u in cand_set and u not in seen and not is_blocked_source(u):
-                seen.add(u)
-                out.append(u)
-        return out
+        return [u for u in xs2 if u in cand_set and not is_blocked_source(u)]
 
     sources_used = only_candidates(parsed.get("sources_used"))
     min_links = only_candidates(parsed.get("min_links"))
@@ -1179,24 +1257,19 @@ VALIDATION:
                 range_tag = "General"
 
             strength_raw = item.get("strength")
-            strength_num = (
-                float(strength_raw)
-                if isinstance(strength_raw, (int, float))
-                else (parse_number_like(str(strength_raw)) or DEFAULT_STRENGTH_SCORE)
-            )
-            strength_int = int(max(0, min(100, round(strength_num))))
-            strength_int = int(max(0, min(100, strength_int + reliability_boost(url))))
+            strength_num = float(strength_raw) if isinstance(strength_raw, (int, float)) else DEFAULT_STRENGTH_SCORE
+            strength_int = int(max(0, min(100, round(strength_num) + reliability_boost(url))))
 
             scored_sources.append({"url": url, "range_tag": range_tag, "strength": strength_int})
 
+    # Dedupe sources
     best_src: Dict[str, Dict[str, Any]] = {}
     for s in scored_sources:
         u = s["url"]
-        if u not in best_src or int(s["strength"]) > int(best_src[u]["strength"]):
+        if u not in best_src or s["strength"] > best_src[u]["strength"]:
             best_src[u] = s
 
-    dedup_scored = list(best_src.values())
-    dedup_scored.sort(key=lambda x: int(x.get("strength", 0)), reverse=True)
+    dedup_scored = sorted(best_src.values(), key=lambda x: x.get("strength", 0), reverse=True)
 
     return {
         "min_usd": int(round(min_usd)),
@@ -1206,9 +1279,8 @@ VALIDATION:
         "min_links": min_links,
         "max_links": max_links,
         "scored_sources": dedup_scored,
-        "experience_adjustment": parsed.get("experience_adjustment", ""),
+        "conversion_notes": parsed.get("conversion_notes", ""),
     }
-
 
 # ============================================================
 # UI state init
@@ -1225,7 +1297,7 @@ def init_state():
         "currency": "USD",
         "last_result": None,
         "debug_last_error": None,
-        "uploaded_file_key": None,  # Track processed uploads
+        "uploaded_file_key": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1261,11 +1333,19 @@ st.markdown(
 # ============================================================
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Software Engineer")
-    st.text_input("Experience Level (optional)", key="experience_level", placeholder="e.g., Senior, 5+ years, Entry-level")
-    st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description to extract key skills and experience requirements...", height=130)
+    st.text_input(
+        "Experience Level (optional)",
+        key="experience_level",
+        placeholder="e.g., Senior, 5+ years, Entry-level, Junior"
+    )
+    st.text_area(
+        "Job Description (optional)",
+        key="job_desc",
+        placeholder="Paste job description to extract skills and experience requirements...",
+        height=130
+    )
 
     uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
-    # FIXED: Track uploaded files to prevent overwrites
     if uploaded is not None:
         file_key = f"uploaded_{uploaded.name}_{uploaded.size}"
         if st.session_state.get("uploaded_file_key") != file_key:
@@ -1282,7 +1362,7 @@ with st.container(border=True):
         countries = []
 
     if not countries:
-        st.error("Could not load country list. Check your internet connection and try again.")
+        st.error("Could not load country list. Check your internet connection.")
         countries = ["(unavailable)"]
 
     country_options = [""] + countries if countries and countries[0] != "(unavailable)" else ["(unavailable)"]
@@ -1334,7 +1414,7 @@ with st.container(border=True):
     with c3:
         rate_type_label = st.radio(
             "Rate Type *",
-            options=["Salary", "Hourly"],
+            options=["Salary (Annual)", "Hourly"],
             index=0 if st.session_state["rate_type"] == "salary" else 1,
             horizontal=True,
             key="rate_type_radio",
@@ -1344,11 +1424,9 @@ with st.container(border=True):
     fx_rates = get_fx_table_usd()
     currency_codes = sorted(fx_rates.keys())
     st.selectbox(
-        "Currency *",
+        "Display Currency *",
         options=currency_codes,
-        index=currency_codes.index(st.session_state["currency"])
-        if st.session_state["currency"] in currency_codes
-        else currency_codes.index("USD"),
+        index=currency_codes.index(st.session_state["currency"]) if st.session_state["currency"] in currency_codes else currency_codes.index("USD"),
         key="currency",
     )
 
@@ -1358,7 +1436,7 @@ with st.container(border=True):
         if not (st.session_state["country"] or "").strip():
             return False, "Country is required."
         if st.session_state["country"] == "(unavailable)":
-            return False, "Country list is unavailable right now. Please try again."
+            return False, "Country list is unavailable."
         if not (st.session_state["currency"] or "").strip():
             return False, "Currency is required."
         return True, ""
@@ -1374,8 +1452,9 @@ with st.container(border=True):
 # ============================================================
 if submitted:
     st.session_state["debug_last_error"] = None
+    candidates = []
 
-    with st.spinner("Analyzing recent market data..."):
+    with st.spinner("Searching salary data sources..."):
         try:
             job_title = st.session_state["job_title"].strip()
             job_desc = (st.session_state["job_desc"] or "").strip()
@@ -1388,40 +1467,32 @@ if submitted:
             currency = st.session_state["currency"]
 
             candidates = serpapi_search(
-                job_title,
-                country,
-                state,
-                city,
-                rate_type,
-                job_desc=job_desc,
-                experience_level=experience_level,
+                job_title, country, state, city, rate_type,
+                job_desc=job_desc, experience_level=experience_level,
             )
 
             if not candidates:
-                st.warning(f"No salary data sources found for {job_title} in {country}. Try adjusting your search criteria.")
+                st.warning(f"No salary sources found for {job_title} in {country}. Try adjusting your search.")
                 st.session_state["last_result"] = None
             else:
-                result = openai_estimate(
-                    job_title,
-                    job_desc,
-                    experience_level,
-                    country,
-                    state,
-                    city,
-                    rate_type,
-                    candidates,
-                )
+                with st.spinner(f"Analyzing {len(candidates)} sources..."):
+                    result = openai_estimate(
+                        job_title, job_desc, experience_level,
+                        country, state, city, rate_type, candidates,
+                    )
 
                 min_usd = float(result["min_usd"])
                 max_usd = float(result["max_usd"])
                 pay_type = str(result.get("pay_type", rate_type_to_pay_type(rate_type))).upper()
 
+                # Convert to display currency
                 min_disp = min_usd
                 max_disp = max_usd
                 if currency.upper() != "USD":
                     min_disp = convert_from_usd(min_usd, currency)
                     max_disp = convert_from_usd(max_usd, currency)
 
+                # Build source display data
                 cand_map: Dict[str, Dict[str, Any]] = {c["url"]: c for c in candidates}
                 scored = result.get("scored_sources") or []
                 score_map: Dict[str, int] = {}
@@ -1439,6 +1510,8 @@ if submitted:
                 sources_used = result.get("sources_used") or []
 
                 def add_source(u: str, rng: str):
+                    if any(s["url"] == u for s in sources):
+                        return
                     host, slug = pretty_url_label(u)
                     title = f"{host} — {slug}" if slug else host
                     strength = int(score_map.get(u, DEFAULT_STRENGTH_SCORE))
@@ -1446,22 +1519,19 @@ if submitted:
                     geo = str(cand_map.get(u, {}).get("geo_tag", "Nearby/Unclear"))
                     sources.append({"title": title, "url": u, "range": rng, "strength": strength, "geo": geo})
 
+                rate_label = "Hourly" if pay_type == "HOURLY" else "Annual"
                 for u in min_links:
-                    add_source(u, "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)")
+                    add_source(u, f"Min ({rate_label})")
                 for u in max_links:
-                    add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
+                    add_source(u, f"Max ({rate_label})")
 
+                # Add more sources if needed
                 if len(sources) < 5:
                     for item in scored:
                         u = item.get("url")
-                        if isinstance(u, str) and u.startswith(("http://", "https://")) and not is_blocked_source(u):
+                        if isinstance(u, str) and u.startswith("http") and not is_blocked_source(u):
                             tag = tag_map.get(u, "General")
-                            if tag == "Min":
-                                rng = "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"
-                            elif tag == "Max":
-                                rng = "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"
-                            else:
-                                rng = "Source"
+                            rng = f"Min ({rate_label})" if tag == "Min" else f"Max ({rate_label})" if tag == "Max" else "Source"
                             add_source(u, rng)
                             if len(sources) >= MAX_SOURCES_TO_DISPLAY:
                                 break
@@ -1473,16 +1543,8 @@ if submitted:
                         if len(sources) >= 10:
                             break
 
-                seen = set()
-                deduped: List[Dict[str, Any]] = []
-                for s in sources:
-                    u = s.get("url")
-                    if not u or u in seen:
-                        continue
-                    seen.add(u)
-                    deduped.append(s)
-
-                deduped.sort(
+                # Sort by geo match then strength
+                sources.sort(
                     key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
                     reverse=True,
                 )
@@ -1492,44 +1554,46 @@ if submitted:
                     "max": int(round(max_disp)),
                     "currency": currency.upper(),
                     "rateType": pay_type_to_rate_type(pay_type),
-                    "sources": deduped[:MAX_SOURCES_TO_DISPLAY],
-                    "experience_adjustment": result.get("experience_adjustment", ""),
+                    "sources": sources[:MAX_SOURCES_TO_DISPLAY],
+                    "conversion_notes": result.get("conversion_notes", ""),
                 }
 
         except requests.HTTPError as e:
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
 
-            msg = "Something went wrong while calculating the rate range. Please try again in a moment."
+            status = None
             try:
                 status = e.response.status_code if e.response is not None else None
             except Exception:
-                status = None
+                pass
 
             if status == 401:
-                msg = (
-                    "OpenAI authentication failed (401). "
-                    "Make sure OPENAI_API_KEY is set in Streamlit Secrets or environment variables, "
-                    "and that the key is valid."
-                )
-            st.error(msg)
+                st.error("API authentication failed. Check your OPENAI_API_KEY.")
+            else:
+                st.error("Something went wrong. Please try again.")
 
         except Exception as e:
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
 
             error_str = str(e)
-            if "zero/negative values" in error_str or "very low values" in error_str or "invalid values" in error_str:
-                st.error("❌ Could not find valid salary data in search results.")
-                st.warning(f"**Possible issues:**\n- Job title may be too specific or uncommon in {country}\n- Try simplifying the job title\n- Try a different location or remove state/city filters")
+            if "zero" in error_str.lower() or "invalid" in error_str.lower():
+                st.error("❌ Could not extract valid salary data from search results.")
+                st.warning(
+                    f"**Suggestions:**\n"
+                    f"- Simplify the job title (e.g., 'Software Engineer' instead of 'Senior Full-Stack Engineer III')\n"
+                    f"- Try a different location\n"
+                    f"- Remove state/city filters"
+                )
 
-                if 'candidates' in locals() and candidates:
-                    with st.expander("🔍 Sources found (but no salary data detected)", expanded=False):
+                if candidates:
+                    with st.expander("🔍 Sources found (but no salary data extracted)", expanded=False):
                         for i, c in enumerate(candidates[:10], 1):
                             st.markdown(f"**{i}.** [{c.get('host', 'Unknown')}]({c.get('url', '#')})")
                             st.caption(f"Title: {c.get('title', 'N/A')[:100]}")
                             st.caption(f"Snippet: {c.get('snippet', 'N/A')[:200]}")
-                            st.markdown("---")
+                            st.divider()
             else:
                 st.error(f"Error: {error_str[:300]}")
 
@@ -1544,6 +1608,14 @@ if res:
     min_v = res["min"]
     max_v = res["max"]
 
+    # Format numbers appropriately
+    if res["rateType"] == "hourly":
+        min_formatted = f"{min_v:,}"
+        max_formatted = f"{max_v:,}"
+    else:
+        min_formatted = f"{min_v:,}"
+        max_formatted = f"{max_v:,}"
+
     range_html = f"""
     <div class="jr-range">
       <div class="jr-range-top">
@@ -1553,13 +1625,13 @@ if res:
       <div class="jr-range-grid">
         <div>
           <p class="jr-range-label">Minimum</p>
-          <p class="jr-range-amt">{cur} {min_v:,}</p>
+          <p class="jr-range-amt">{cur} {min_formatted}</p>
           <p class="jr-range-unit">{unit}</p>
         </div>
         <div class="jr-dash">—</div>
         <div>
           <p class="jr-range-label">Maximum</p>
-          <p class="jr-range-amt">{cur} {max_v:,}</p>
+          <p class="jr-range-amt">{cur} {max_formatted}</p>
           <p class="jr-range-unit">{unit}</p>
         </div>
       </div>
@@ -1567,27 +1639,26 @@ if res:
     """
     st.markdown(range_html, unsafe_allow_html=True)
 
-    # Show experience adjustment if available
-    exp_adj = res.get("experience_adjustment", "")
-    if exp_adj:
-        st.caption(f"📊 Experience adjustment: {exp_adj}")
+    # Show conversion notes if available
+    notes = res.get("conversion_notes", "")
+    if notes:
+        st.caption(f"📊 {notes}")
 
     sources: List[Dict[str, Any]] = res.get("sources") or []
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("Sources prioritized by geo match and reliability. Range based on actual data from these sources.")
+        st.caption("Sources sorted by location match and reliability.")
 
         if not sources:
-            st.caption("No sources were returned confidently for this query.")
+            st.caption("No sources returned for this query.")
         else:
             for s in sources:
-                # FIXED: Use proper HTML escaping
                 title = html.escape(s.get("title") or "Source")
                 url = html.escape(s.get("url") or "", quote=True)
                 rng = html.escape(s.get("range") or "Source")
                 geo = (s.get("geo") or "Nearby/Unclear").strip()
-                geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
+                geo_label = {"Exact": "Exact", "Country-level": "Country-level"}.get(geo, "Nearby/Unclear")
 
                 try:
                     strength_i = int(max(0, min(100, int(s.get("strength", DEFAULT_STRENGTH_SCORE)))))
@@ -1600,10 +1671,10 @@ if res:
                   <div style="min-width:0; width:100%;">
                     <div class="jr-source-main">{title}</div>
                     <div class="jr-source-sub">
-                      <span>Reported Range: {rng}</span>
+                      <span>Range: {rng}</span>
                       <span class="jr-geo-pill">{geo_label}</span>
                       <span class="jr-score-pill">
-                        <span>Source Strength</span>
+                        <span>Strength</span>
                         <span>{strength_i}/100</span>
                         <span class="jr-score-bar">
                           <span class="jr-score-fill" style="width:{strength_i}%;"></span>
@@ -1618,13 +1689,14 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> The estimated range is calculated from the salary data in these sources.
-              Wide ranges may reflect differences in experience level, company size, or role seniority.
+              <strong>Note:</strong> Salary ranges are estimated from available online data.
+              Actual compensation may vary based on company, skills, and negotiation.
             </div>
             """,
             unsafe_allow_html=True,
         )
 
+# Debug section
 if st.session_state.get("debug_last_error"):
     with st.expander("Debug details", expanded=False):
         st.code(st.session_state["debug_last_error"])
