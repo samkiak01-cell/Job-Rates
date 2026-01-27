@@ -476,21 +476,27 @@ def parse_number_like(x: Any) -> Optional[float]:
 
 
 def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, float]:
-    if pay_type == "HOURLY":
-        min_v = max(5.0, min(min_v, 1000.0))
-        max_v = max(5.0, min(max_v, 1500.0))
-    else:
-        # Lower floor to catch more international salaries
-        min_v = max(5_000.0, min(min_v, 10_000_000.0))
-        max_v = max(5_000.0, min(max_v, 10_000_000.0))
-
+    """Validate salary range without artificial limits."""
+    # Only basic sanity checks, no artificial floors/ceilings
+    if min_v <= 0 or max_v <= 0:
+        return 0.0, 0.0  # Signal that values are invalid
+    
+    if not math.isfinite(min_v) or not math.isfinite(max_v):
+        return 0.0, 0.0
+    
+    # Ensure min <= max
     if min_v > max_v:
         min_v, max_v = max_v, min_v
     
-    # Safety check: if both are at floor, something went wrong
-    if pay_type != "HOURLY" and min_v == 5_000.0 and max_v == 5_000.0:
-        # Return placeholder that indicates error
-        return 0.0, 0.0
+    # Very basic sanity check: reject obviously wrong values
+    if pay_type == "HOURLY":
+        # Hourly should be between $0.01 and $10,000/hour
+        if min_v > 10000 or max_v > 10000:
+            return 0.0, 0.0
+    else:
+        # Annual should be between $1 and $50M/year
+        if min_v > 50_000_000 or max_v > 50_000_000:
+            return 0.0, 0.0
     
     return min_v, max_v
 
@@ -917,7 +923,7 @@ def openai_estimate(
         )
     url_block = "\n".join(lines) if lines else "- (no links found)"
 
-    # IMPROVED PROMPT: Forces AI to extract actual numbers from sources
+    # IMPROVED PROMPT: Extract salary data and link sources to min/max
     prompt = f"""
 You are a salary research analyst. Extract salary data from the provided sources.
 
@@ -932,43 +938,50 @@ Job Details:
 CRITICAL INSTRUCTIONS:
 1. Look for salary numbers in the titles and snippets below
 2. If you see explicit numbers (e.g., "$50K-80K", "R$5000-8000"), use those
-3. If no explicit numbers but source clearly discusses "{job_title}" salary for {country}, make reasonable estimate based on:
-   - Job title and seniority level
-   - Country economic context
-   - Any partial information in snippets
-4. Experience level "{exp}" MUST affect range (senior = higher, junior = lower)
+3. If no explicit numbers but source discusses "{job_title}" salary, make reasonable estimate based on context
+4. Experience level "{exp}" affects range (senior = higher, junior = lower)
 5. Convert from {local_currency} to USD: BRL÷5, EUR×1.1, GBP×1.27, INR÷83, MXN÷17, AUD×0.65, CAD×0.74
+6. IMPORTANT: Tag each source as supporting "Min", "Max", or "General" range
+7. min_links should contain URLs that support your MINIMUM value
+8. max_links should contain URLs that support your MAXIMUM value
 
 Available sources:
 {url_block}
 
 Output STRICT JSON (no markdown):
 {{
-  "min_usd": <number (e.g., 50000)>,
-  "max_usd": <number (e.g., 80000)>,
+  "min_usd": <number>,
+  "max_usd": <number>,
   "pay_type": "HOURLY"|"ANNUAL",
   "sources": [
     {{
       "url": <url>,
       "range_tag": "Min"|"Max"|"General",
       "strength": <0-100>,
-      "extracted_range": "<what you found or how you estimated>"
+      "extracted_range": "<what you found>"
     }}
   ],
-  "sources_used": [<urls>],
-  "min_links": [<urls>],
-  "max_links": [<urls>]
+  "sources_used": [<all urls you used>],
+  "min_links": [<urls that justify the MINIMUM>],
+  "max_links": [<urls that justify the MAXIMUM>]
 }}
 
 Requirements:
 - Return realistic numbers for {job_title} at {exp} level in {country}
-- min_usd and max_usd must be NUMERIC (e.g., 65000, not "$65K")
-- For {pay_type}: typical range should be {"$15-50/hour" if pay_type == "HOURLY" else "$30K-$200K/year"}
-- If sources are sparse, estimate conservatively based on job title and location
-- Use at least 2-3 sources that seem relevant to {job_title}
-- "extracted_range" explains what data you found (e.g., "Snippet mentions 'competitive salary for engineers'")
+- min_usd and max_usd must be NUMERIC values (e.g., 65000)
+- min_links: URLs showing lower end of range (entry-level, minimum salary data)
+- max_links: URLs showing upper end of range (senior-level, maximum salary data)
+- At least 1-2 sources should support the min, and 1-2 should support the max
+- "extracted_range" explains what data you found or how you estimated
+- Allow WIDE ranges if sources support it (e.g., $40K-$150K for roles with big seniority spread)
 
-EXAMPLE OUTPUT: {{"min_usd": 65000, "max_usd": 95000, "pay_type": "ANNUAL", "sources": [...]}}
+EXAMPLE: {{"min_usd": 45000, "max_usd": 95000, "pay_type": "ANNUAL", 
+  "min_links": ["url1", "url2"], 
+  "max_links": ["url3", "url4"],
+  "sources": [
+    {{"url": "url1", "range_tag": "Min", "strength": 75, "extracted_range": "$45K for entry-level"}},
+    {{"url": "url3", "range_tag": "Max", "strength": 80, "extracted_range": "$95K for senior"}}
+  ]}}
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -1455,49 +1468,129 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("Sources prioritized by geo match and reliability. Range based on actual data from these sources.")
+        st.caption("Sources linked to the minimum and maximum values in the estimated range.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
         else:
-            for s in sources:
-                title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                url = (s.get("url") or "").replace('"', "%22")
-                rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                geo = (s.get("geo") or "Nearby/Unclear").strip()
-                geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
+            # Group sources by type
+            min_sources = [s for s in sources if "Min" in s.get("range", "")]
+            max_sources = [s for s in sources if "Max" in s.get("range", "")]
+            general_sources = [s for s in sources if s not in min_sources and s not in max_sources]
+            
+            # Show minimum supporting sources
+            if min_sources:
+                st.markdown(f"#### 💰 Minimum ({cur} {min_v:,} {unit})")
+                for s in min_sources:
+                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    url = (s.get("url") or "").replace('"', "%22")
+                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    geo = (s.get("geo") or "Nearby/Unclear").strip()
+                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
 
-                try:
-                    strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
-                except Exception:
-                    strength_i = 55
+                    try:
+                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
+                    except Exception:
+                        strength_i = 55
 
-                row_html = f"""
-                <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                  <div class="jr-source-ico">↗</div>
-                  <div style="min-width:0; width:100%;">
-                    <div class="jr-source-main">{title}</div>
-                    <div class="jr-source-sub">
-                      <span>Reported Range: {rng}</span>
-                      <span class="jr-geo-pill">{geo_label}</span>
-                      <span class="jr-score-pill">
-                        <span>Source Strength</span>
-                        <span>{strength_i}/100</span>
-                        <span class="jr-score-bar">
-                          <span class="jr-score-fill" style="width:{strength_i}%;"></span>
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                </a>
-                """
-                st.markdown(row_html, unsafe_allow_html=True)
+                    row_html = f"""
+                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+                      <div class="jr-source-ico">↗</div>
+                      <div style="min-width:0; width:100%;">
+                        <div class="jr-source-main">{title}</div>
+                        <div class="jr-source-sub">
+                          <span>Supports: {rng}</span>
+                          <span class="jr-geo-pill">{geo_label}</span>
+                          <span class="jr-score-pill">
+                            <span>Strength</span>
+                            <span>{strength_i}/100</span>
+                            <span class="jr-score-bar">
+                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </a>
+                    """
+                    st.markdown(row_html, unsafe_allow_html=True)
+            
+            # Show maximum supporting sources
+            if max_sources:
+                st.markdown(f"#### 💎 Maximum ({cur} {max_v:,} {unit})")
+                for s in max_sources:
+                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    url = (s.get("url") or "").replace('"', "%22")
+                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    geo = (s.get("geo") or "Nearby/Unclear").strip()
+                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
+
+                    try:
+                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
+                    except Exception:
+                        strength_i = 55
+
+                    row_html = f"""
+                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+                      <div class="jr-source-ico">↗</div>
+                      <div style="min-width:0; width:100%;">
+                        <div class="jr-source-main">{title}</div>
+                        <div class="jr-source-sub">
+                          <span>Supports: {rng}</span>
+                          <span class="jr-geo-pill">{geo_label}</span>
+                          <span class="jr-score-pill">
+                            <span>Strength</span>
+                            <span>{strength_i}/100</span>
+                            <span class="jr-score-bar">
+                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </a>
+                    """
+                    st.markdown(row_html, unsafe_allow_html=True)
+            
+            # Show general sources
+            if general_sources:
+                st.markdown("#### 📊 General Range Sources")
+                for s in general_sources:
+                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    url = (s.get("url") or "").replace('"', "%22")
+                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                    geo = (s.get("geo") or "Nearby/Unclear").strip()
+                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
+
+                    try:
+                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
+                    except Exception:
+                        strength_i = 55
+
+                    row_html = f"""
+                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+                      <div class="jr-source-ico">↗</div>
+                      <div style="min-width:0; width:100%;">
+                        <div class="jr-source-main">{title}</div>
+                        <div class="jr-source-sub">
+                          <span>{rng}</span>
+                          <span class="jr-geo-pill">{geo_label}</span>
+                          <span class="jr-score-pill">
+                            <span>Strength</span>
+                            <span>{strength_i}/100</span>
+                            <span class="jr-score-bar">
+                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </a>
+                    """
+                    st.markdown(row_html, unsafe_allow_html=True)
 
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> Ranges are extracted from actual salary data in source content. 
-              Experience level and job requirements influence source selection and weighting.
+              <strong>Note:</strong> Sources are categorized by whether they support the minimum, maximum, or general range. 
+              Large ranges may reflect differences in experience level, company size, or role seniority.
             </div>
             """,
             unsafe_allow_html=True,
