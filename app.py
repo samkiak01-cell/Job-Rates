@@ -253,14 +253,14 @@ def get_country_list() -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_states_for_country(country: str) -> List[str]:
-    """
-    Returns list of states/provinces.
-    Returns [] if none or unavailable. (UI adds a blank option on top.)
-    """
     try:
         if not country:
             return []
-        r = http_post(f"{COUNTRIESNOW_BASE}/countries/states", json_body={"country": country}, timeout=25)
+        r = http_post(
+            f"{COUNTRIESNOW_BASE}/countries/states",
+            json_body={"country": country},
+            timeout=25,
+        )
         if not r.ok:
             return []
         data = r.json()
@@ -269,27 +269,23 @@ def get_states_for_country(country: str) -> List[str]:
             name = s.get("name")
             if isinstance(name, str) and name.strip():
                 states.append(name.strip())
-        states = sorted(set(states), key=lambda x: x.lower())
-        return states
+        return sorted(set(states), key=lambda x: x.lower())
     except Exception:
         return []
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
-    """
-    City list.
-    - If state is blank/unknown: fetch country-level cities.
-    - Else: fetch state-level cities.
-    Returns [] if unavailable. (UI adds a blank option on top.)
-    """
     try:
         if not country:
             return []
 
-        # If state is blank/unknown, search the whole country
         if not state:
-            r = http_post(f"{COUNTRIESNOW_BASE}/countries/cities", json_body={"country": country}, timeout=25)
+            r = http_post(
+                f"{COUNTRIESNOW_BASE}/countries/cities",
+                json_body={"country": country},
+                timeout=25,
+            )
             if not r.ok:
                 return []
             data = r.json()
@@ -423,6 +419,61 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
+# Job description: robust short "hint" builder for search
+# ============================================================
+def make_desc_hint(job_desc: str, *, max_chars: int = 90) -> str:
+    """
+    Produces a short, search-friendly hint extracted from the job description.
+    Goal: steer SerpAPI results without overfitting/adding noise.
+    """
+    if not job_desc:
+        return ""
+
+    t = job_desc.strip()
+    if len(t) < 8:
+        return ""
+
+    # Collapse whitespace and remove noisy punctuation
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"[^\w\s\-/&+]", " ", t)  # keep words and some separators
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # If the user typed something like "mid level video designer", keep it
+    # Else if it's a full JD, take the first sentence-ish chunk
+    # and remove common boilerplate words that pollute search.
+    boiler = {
+        "responsibilities", "requirements", "qualification", "qualifications",
+        "about", "company", "role", "position", "job", "summary", "overview",
+        "benefits", "equal", "opportunity", "employer", "apply", "applying",
+    }
+
+    # Take a reasonably short prefix
+    snippet = t[: max_chars * 2]
+    # Tokenize-ish
+    words = [w for w in re.split(r"\s+", snippet) if w]
+    cleaned_words: List[str] = []
+    for w in words:
+        lw = w.lower()
+        if lw in boiler:
+            continue
+        # avoid giant tokens
+        if len(w) > 28:
+            continue
+        cleaned_words.append(w)
+        if sum(len(x) + 1 for x in cleaned_words) >= max_chars:
+            break
+
+    hint = " ".join(cleaned_words).strip()
+    if len(hint) < 8:
+        # fallback: just take the first line fragment
+        hint = t[:max_chars].strip()
+
+    # Final trim
+    hint = hint[:max_chars].strip()
+    return hint
+
+
+# ============================================================
 # AI logic
 # ============================================================
 def rate_type_to_pay_type(rate_type: str) -> str:
@@ -433,16 +484,41 @@ def pay_type_to_rate_type(pay_type: str) -> str:
     return "hourly" if (pay_type or "").strip().upper() == "HOURLY" else "salary"
 
 
-def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
+def serpapi_search(
+    job_title: str,
+    job_desc: str,
+    country: str,
+    state: str,
+    city: str,
+    rate_type: str,
+) -> List[str]:
+    """
+    Robust version:
+    - Uses job_desc as a *light* modifier if present
+    - Keeps search query short + focused to improve source relevance
+    - Pulls a bit more results, then de-dupes
+    """
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
 
     location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
     pay_type = rate_type_to_pay_type(rate_type)
-    query = f'{job_title} salary range {loc} {"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
+    desc_hint = make_desc_hint(job_desc, max_chars=80)
 
-    params = {"engine": "google", "q": query, "api_key": serp_key, "num": 15}
+    # Put the description hint AFTER title so title remains the primary intent.
+    # Wrap hint in quotes to keep it from exploding the query.
+    hint_block = f' "{desc_hint}"' if desc_hint else ""
+
+    query = f'{job_title}{hint_block} salary range {loc} {"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
+
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": serp_key,
+        "num": 20,
+    }
+
     r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
     r.raise_for_status()
     data = r.json()
@@ -461,7 +537,7 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
         seen.add(u)
         out.append(u)
 
-    return out[:18]
+    return out[:20]
 
 
 def openai_estimate(
@@ -479,7 +555,8 @@ def openai_estimate(
     location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
-    url_block = "\n".join(f"- {u}" for u in urls[:12]) if urls else "- (no links found)"
+    # Give the model more candidates so it can choose 5+ *if possible*.
+    url_block = "\n".join(f"- {u}" for u in urls[:18]) if urls else "- (no links found)"
 
     prompt = f"""
 You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
@@ -505,8 +582,7 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
       "url": <url>,
       "range_tag": "Min"|"Max"|"General",
       "strength": <integer 0-100>
-    }},
-    ...
+    }}
   ],
 
   "sources_used": [<url>, ...],
@@ -516,8 +592,8 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 
 Rules:
 - min_usd must be <= max_usd and both realistic for the role/location.
-- Try to return 5–8 strong sources if (and only if) there are 5–8 clearly relevant, reputable sources available in the candidate links.
-- Do NOT force a minimum number of sources. If only 2–4 good sources exist, return only those.
+- Prefer returning 5–8 strong sources if (and only if) 5–8 clearly relevant, reputable sources exist in the candidate links.
+- Do NOT force a minimum number of sources.
 - Only include a source if it materially supports the range for this role + location.
 - Avoid low-quality or irrelevant sources.
 - strength is how strong the page is as a compensation source (0-100).
@@ -686,6 +762,7 @@ with st.container(border=True):
         index=country_options.index(st.session_state["country"]) if st.session_state["country"] in country_options else 0,
         key="country",
         on_change=on_country_change,
+        format_func=lambda x: "— Select —" if x == "" else x,
     )
 
     # Build state list (blank option at top)
@@ -779,7 +856,9 @@ if submitted:
             rate_type = st.session_state["rate_type"]
             currency = st.session_state["currency"]
 
-            urls = serpapi_search(job_title, country, state, city, rate_type)
+            # IMPORTANT: serp search now uses job_desc hint
+            urls = serpapi_search(job_title, job_desc, country, state, city, rate_type)
+
             result = openai_estimate(job_title, job_desc, country, state, city, rate_type, urls)
 
             min_usd = float(result["min_usd"])
@@ -831,13 +910,13 @@ if submitted:
                         else:
                             rng = "Source"
                         add_source(u, rng)
-                        if len(sources) >= 10:
+                        if len(sources) >= 12:
                             break
 
             if len(sources) < 3:
                 for u in sources_used:
                     add_source(u, "Source")
-                    if len(sources) >= 8:
+                    if len(sources) >= 12:
                         break
 
             # dedupe
@@ -855,7 +934,6 @@ if submitted:
                 "max": int(round(max_disp)),
                 "currency": currency.upper(),
                 "rateType": pay_type_to_rate_type(pay_type),
-                # increased source list cap (previous update)
                 "sources": deduped[:12],
             }
 
