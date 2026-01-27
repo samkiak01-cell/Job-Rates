@@ -337,7 +337,7 @@ def convert_from_usd(amount: float, to_ccy: str) -> float:
 
 
 # ============================================================
-# URL label helper
+# URL helpers
 # ============================================================
 def pretty_url_label(raw_url: str) -> Tuple[str, str]:
     try:
@@ -364,6 +364,7 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
 def host_of(url: str) -> str:
     try:
         from urllib.parse import urlparse
+
         return (urlparse(url).hostname or "").replace("www.", "").lower()
     except Exception:
         return ""
@@ -456,7 +457,7 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
     cleaned = re.sub(r"[^\w\s\-/&+]", " ", desc)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-    tokens = re.split(r"\s+", cleaned)[:140]
+    tokens = re.split(r"\s+", cleaned)[:160]
     keep: List[str] = []
     for t in tokens:
         tt = t.strip()
@@ -467,11 +468,15 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
             continue
         if len(tt) < 3 or len(tt) > 22:
             continue
+
+        # keep "skill-ish" tokens
         if any(ch in tt for ch in ["/", "+", "-", "&"]) or (re.search(r"[A-Z]", tt) is not None):
             keep.append(tt)
         else:
-            if low in {"figma", "adobe", "after", "effects", "photoshop", "illustrator", "premiere",
-                       "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design"}:
+            if low in {
+                "figma", "adobe", "after", "effects", "photoshop", "illustrator", "premiere",
+                "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design"
+            }:
                 keep.append(tt)
 
         if len(keep) >= 8:
@@ -541,17 +546,14 @@ def norm_loc(s: str) -> str:
 def url_contains_location(url: str, token: str) -> bool:
     if not token:
         return True
-    t = norm_loc(token).replace(" ", "-")
+    token_norm = norm_loc(token)
+    token_dash = token_norm.replace(" ", "-")
     u = url.lower()
-    return (t in u) or (norm_loc(token) in norm_loc(u))
+    return (token_dash in u) or (token_norm in norm_loc(u))
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def page_text_contains(url: str, needle: str) -> bool:
-    """
-    Very lightweight content check (best-effort).
-    Only used on a small candidate set.
-    """
     try:
         if not needle:
             return True
@@ -559,24 +561,17 @@ def page_text_contains(url: str, needle: str) -> bool:
         if not r.ok:
             return False
         txt = r.text or ""
-        txt_low = norm_loc(txt)
-        return norm_loc(needle) in txt_low
+        return norm_loc(needle) in norm_loc(txt)
     except Exception:
         return False
 
 
 def geo_tag_for_url(url: str, country: str, state: str, city: str) -> str:
-    """
-    Returns: "Exact", "Country-level", "Nearby"
-    - Exact: has country and (state/city if provided) best-effort.
-    - Country-level: has country but missing state/city (or they weren't provided).
-    - Nearby: missing country match, or missing state/city when provided.
-    """
     c = (country or "").strip()
     s = (state or "").strip()
     ci = (city or "").strip()
 
-    # Require country always
+    # Require country always (best-effort)
     country_ok = url_contains_location(url, c) or page_text_contains(url, c)
     if not country_ok:
         return "Nearby"
@@ -584,17 +579,14 @@ def geo_tag_for_url(url: str, country: str, state: str, city: str) -> str:
     if not s and not ci:
         return "Country-level"
 
-    # if city provided, require it
     if ci:
         city_ok = url_contains_location(url, ci) or page_text_contains(url, ci)
         if not city_ok:
             return "Nearby"
 
-    # if state provided, require it (unless city already matched and state isn't common on page)
     if s:
         state_ok = url_contains_location(url, s) or page_text_contains(url, s)
         if not state_ok:
-            # allow if city matched and country matched (some pages omit state)
             if ci and (url_contains_location(url, ci) or page_text_contains(url, ci)):
                 return "Exact"
             return "Nearby"
@@ -628,20 +620,25 @@ def serpapi_search(
 ) -> List[str]:
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
 
-    location_bits = [b for b in [city, state, country] if b]
-    loc = ", ".join(location_bits) if location_bits else country
-
     pay_type = rate_type_to_pay_type(rate_type)
     hint = build_search_hint(job_desc, experience_level)
-    hint_part = f' "{hint}"' if hint else ""
 
-    # Country is always explicit; if city/state chosen, keep them explicit too.
-    query = (
-        f'{job_title}{hint_part} salary range "{country}" '
-        f'{"hourly rate" if pay_type=="HOURLY" else "annual salary"} '
-        f'{(" " + f"\\"{state}\\"" ) if state else ""}'
-        f'{(" " + f"\\"{city}\\"" ) if city else ""}'
-    )
+    parts: List[str] = []
+    parts.append(job_title.strip())
+    if hint:
+        parts.append(hint)
+
+    # Always force country into the query
+    parts.append(f'salary range "{country}"')
+    parts.append("hourly rate" if pay_type == "HOURLY" else "annual salary")
+
+    # Add optional state/city as quoted tokens
+    if state:
+        parts.append(f'"{state}"')
+    if city:
+        parts.append(f'"{city}"')
+
+    query = " ".join([p for p in parts if p]).strip()
 
     params = {
         "engine": "google",
@@ -663,14 +660,12 @@ def serpapi_search(
 
     urls = [u for u in urls if not is_blocked_source(u)]
 
-    # Geo filter pass:
-    # - Keep "Exact" first, then "Country-level", then a few "Nearby" (labeled later)
     scored: List[Tuple[int, int, str]] = []
     for u in urls:
         tag = geo_tag_for_url(u, country, state, city)
         scored.append((geo_priority(tag), reliability_boost(u), u))
 
-    scored.sort(reverse=True)  # geo priority then reliability boost
+    scored.sort(reverse=True)
 
     out: List[str] = []
     seen = set()
@@ -723,16 +718,13 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
   "min_usd": <number>,
   "max_usd": <number>,
   "pay_type": "HOURLY"|"ANNUAL",
-
   "sources": [
     {{
       "url": <url from the candidate links>,
       "range_tag": "Min"|"Max"|"General",
       "strength": <integer 0-100>
-    }},
-    ...
+    }}
   ],
-
   "sources_used": [<url from candidate links>, ...],
   "min_links": [<url from candidate links>, ...],
   "max_links": [<url from candidate links>, ...]
@@ -833,7 +825,6 @@ Rules:
 
             scored_sources.append({"url": url, "range_tag": range_tag, "strength": strength_int})
 
-    # dedupe by URL, keep max strength
     best: Dict[str, Dict[str, Any]] = {}
     for s in scored_sources:
         u = s["url"]
@@ -863,8 +854,8 @@ def init_state():
         "experience_level": "",
         "job_desc": "",
         "country": "",
-        "state": "",  # blank = off
-        "city": "",   # blank = off
+        "state": "",
+        "city": "",
         "rate_type": "salary",
         "currency": "USD",
         "last_result": None,
@@ -905,7 +896,11 @@ st.markdown(
 # ============================================================
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
-    st.text_input("Experience Level (optional)", key="experience_level", placeholder="e.g., Junior, Mid-level, Senior, 5+ years")
+    st.text_input(
+        "Experience Level (optional)",
+        key="experience_level",
+        placeholder="e.g., Junior, Mid-level, Senior, 5+ years",
+    )
     st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description here...", height=130)
 
     uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
@@ -1028,11 +1023,18 @@ if submitted:
             currency = st.session_state["currency"]
 
             urls = serpapi_search(
-                job_title, country, state, city, rate_type,
-                job_desc=job_desc, experience_level=experience_level
+                job_title,
+                country,
+                state,
+                city,
+                rate_type,
+                job_desc=job_desc,
+                experience_level=experience_level,
             )
 
-            result = openai_estimate(job_title, job_desc, experience_level, country, state, city, rate_type, urls)
+            result = openai_estimate(
+                job_title, job_desc, experience_level, country, state, city, rate_type, urls
+            )
 
             min_usd = float(result["min_usd"])
             max_usd = float(result["max_usd"])
@@ -1072,7 +1074,6 @@ if submitted:
             for u in max_links:
                 add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
 
-            # Prefer 5+ only if we truly have them: fill from scored, then sources_used
             if len(sources) < 5:
                 for item in scored:
                     u = item.get("url")
@@ -1095,7 +1096,6 @@ if submitted:
                     if len(sources) >= 10:
                         break
 
-            # dedupe by URL
             seen = set()
             deduped: List[Dict[str, Any]] = []
             for s in sources:
@@ -1105,7 +1105,6 @@ if submitted:
                 seen.add(u)
                 deduped.append(s)
 
-            # Sort: Exact first, then Country-level, then Nearby; within each, strength desc
             deduped.sort(
                 key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
                 reverse=True,
