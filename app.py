@@ -503,59 +503,100 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# Search hint extraction (lightweight)
+# IMPROVED: Job description and experience parsing
 # ============================================================
-STOP_WORDS = {
-    "the", "and", "or", "to", "of", "a", "an", "in", "for", "with", "on", "at", "by",
-    "is", "are", "be", "as", "from", "this", "that", "will", "you", "we", "our", "your",
-    "responsibilities", "requirements", "qualification", "qualifications", "about", "role",
-    "position", "company", "benefits", "equal", "opportunity", "employer", "apply"
+SKILL_INDICATORS = {
+    # Tech
+    "python", "java", "javascript", "typescript", "react", "angular", "vue", "node",
+    "aws", "azure", "gcp", "docker", "kubernetes", "sql", "nosql", "mongodb", "postgres",
+    "api", "rest", "graphql", "microservices", "devops", "ci/cd", "git", "agile", "scrum",
+    # Design
+    "figma", "sketch", "adobe", "photoshop", "illustrator", "indesign", "xd", "after",
+    "premiere", "ui", "ux", "wireframe", "prototype", "visual", "graphic",
+    # Business
+    "excel", "powerpoint", "tableau", "powerbi", "salesforce", "sap", "erp", "crm",
+    "analytics", "reporting", "forecasting", "budgeting", "finance", "accounting",
+    # Marketing
+    "seo", "sem", "ppc", "google", "analytics", "adwords", "facebook", "instagram",
+    "content", "copywriting", "email", "campaign", "social", "media", "brand",
+    # Engineering
+    "autocad", "solidworks", "revit", "cad", "civil", "mechanical", "electrical",
+    # Medical
+    "clinical", "patient", "medical", "healthcare", "nursing", "pharmacy", "hospital",
+    # Other
+    "management", "leadership", "strategy", "operations", "project", "product", "sales"
 }
 
 
+def extract_key_requirements(job_desc: str) -> List[str]:
+    """Extract key skills, technologies, and requirements from job description."""
+    desc = (job_desc or "").strip().lower()
+    if not desc:
+        return []
+    
+    found_skills: List[str] = []
+    seen = set()
+    
+    # Extract years of experience mentions
+    exp_patterns = [
+        r'(\d+)\+?\s*(?:to|\-|–)?\s*\d*\s*years?(?:\s+(?:of\s+)?experience)?',
+        r'(?:minimum|at least)\s+(\d+)\s*years?',
+    ]
+    for pattern in exp_patterns:
+        matches = re.findall(pattern, desc)
+        for match in matches:
+            years = match if isinstance(match, str) else (match[0] if isinstance(match, tuple) else str(match))
+            exp_text = f"{years}+ years"
+            if exp_text not in seen:
+                found_skills.append(exp_text)
+                seen.add(exp_text)
+                break  # Only add one experience requirement
+    
+    # Find skills from our dictionary
+    for skill in SKILL_INDICATORS:
+        if skill in desc and skill not in seen:
+            found_skills.append(skill)
+            seen.add(skill)
+            if len(found_skills) >= 12:
+                break
+    
+    # Find capitalized acronyms/technologies (e.g., AWS, SQL, API)
+    acronyms = re.findall(r'\b[A-Z]{2,6}\b', job_desc)
+    for acro in acronyms:
+        acro_lower = acro.lower()
+        if acro_lower not in seen and len(acro) >= 2:
+            found_skills.append(acro)
+            seen.add(acro_lower)
+            if len(found_skills) >= 12:
+                break
+    
+    # Find compound skills (e.g., React.js, Node.js, C++, C#)
+    compounds = re.findall(r'\b\w+[\.\/\+#]\w+\b', job_desc)
+    for comp in compounds:
+        comp_lower = comp.lower()
+        if comp_lower not in seen and len(comp) <= 20:
+            found_skills.append(comp)
+            seen.add(comp_lower)
+            if len(found_skills) >= 12:
+                break
+    
+    return found_skills[:10]
+
+
 def build_search_hint(job_desc: str, experience_level: str) -> str:
+    """Build search hint from job description and experience level."""
     bits: List[str] = []
+    
+    # Add experience level
     exp = (experience_level or "").strip()
     if exp:
         bits.append(exp)
-
-    desc = (job_desc or "").strip()
-    if not desc:
-        return " ".join(bits).strip()
-
-    cleaned = re.sub(r"[^\w\s\-/&+]", " ", desc)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    tokens = re.split(r"\s+", cleaned)[:160]
-
-    keep: List[str] = []
-    for t in tokens:
-        tt = t.strip()
-        if not tt:
-            continue
-        low = tt.lower()
-        if low in STOP_WORDS:
-            continue
-        if len(tt) < 3 or len(tt) > 22:
-            continue
-
-        # keep skill-ish tokens
-        if any(ch in tt for ch in ["/", "+", "-", "&"]) or (re.search(r"[A-Z]", tt) is not None):
-            keep.append(tt)
-        else:
-            if low in {
-                "figma", "adobe", "after", "effects", "photoshop", "illustrator", "premiere",
-                "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design",
-                "merchandising", "retail", "planograms", "store", "visual"
-            }:
-                keep.append(tt)
-
-        if len(keep) >= 8:
-            break
-
-    hint = " ".join(keep).strip()
-    if hint:
-        bits.append(hint)
-
+    
+    # Extract and add key requirements
+    requirements = extract_key_requirements(job_desc)
+    if requirements:
+        bits.extend(requirements[:6])  # Limit to 6 most important
+    
     return " ".join(bits).strip()
 
 
@@ -716,7 +757,7 @@ def serpapi_search(
     local_name = meta.get("local_name", country)
     local_currency = meta.get("currency", "USD")
 
-    # Query A: Standard English query
+    # Query A: Standard English query + experience level
     q_a_parts = [job_title.strip()]
     if experience_level.strip():
         q_a_parts.append(experience_level.strip())
@@ -728,7 +769,7 @@ def serpapi_search(
     q_a_parts.append("salary")
     q_a = " ".join([p for p in q_a_parts if p]).strip()
 
-    # Query B: With hints and explicit country
+    # Query B: With job description hints
     q_b_parts = [job_title.strip()]
     if hint:
         q_b_parts.append(hint)
@@ -816,7 +857,6 @@ def serpapi_search(
                 )
         except Exception as e:
             # Continue with other queries if one fails
-            st.warning(f"Search query failed: {str(e)[:100]}")
             continue
 
     # Deduplicate by URL, keep the best scoring version
@@ -856,7 +896,11 @@ def openai_estimate(
     loc = ", ".join(location_bits) if location_bits else country
 
     exp = (experience_level or "").strip()
-    exp_line = f'- Experience level (optional): "{exp}"' if exp else '- Experience level (optional): ""'
+    exp_line = f'- Experience level: "{exp}"' if exp else '- Experience level: Not specified'
+    
+    # Extract key requirements for better context
+    requirements = extract_key_requirements(job_desc)
+    req_line = f'- Key requirements: {", ".join(requirements[:8])}' if requirements else '- Key requirements: None specified'
 
     # Give the model the URL + context so it can select correctly
     lines = []
@@ -866,57 +910,58 @@ def openai_estimate(
         )
     url_block = "\n".join(lines) if lines else "- (no links found)"
 
-    # IMPROVED PROMPT with currency awareness
+    # IMPROVED PROMPT: Forces AI to extract actual numbers from sources
     prompt = f"""
-You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
+You are a salary research analyst. Your job is to find ACTUAL salary data from the provided sources.
 
-Task:
+Job Details:
 - Job title: "{job_title}"
-- Job description (optional): "{job_desc or ""}"
 {exp_line}
+{req_line}
 - Location: "{loc}"
-- Local currency: {local_currency} (but convert ALL estimates to USD)
-- Pay type: "{pay_type}" (HOURLY means hourly rate; ANNUAL means yearly salary)
-- Consider only listings/open postings within the last ~6 months (best effort).
+- Local currency: {local_currency} (convert ALL estimates to USD)
+- Pay type: "{pay_type}" (HOURLY = hourly rate; ANNUAL = yearly salary)
 
-IMPORTANT FOR INTERNATIONAL LOCATIONS:
-- Sources may show salaries in {local_currency}, but you MUST convert to USD
-- Use approximate exchange rates if sources don't specify USD
-- Country-level matches are HIGHLY VALUABLE for international locations
-- Local salary sites (even if less famous) are MORE RELIABLE than global aggregators for {country}
+CRITICAL INSTRUCTIONS:
+1. You MUST extract actual salary numbers that appear in the source content (titles/snippets)
+2. DO NOT estimate or infer salaries - only use explicitly stated ranges
+3. The experience level "{exp}" and requirements {requirements[:3] if requirements else []} MUST influence your range selection
+4. If experience level is "senior" or "5+ years", ignore junior/entry-level sources
+5. If experience level is "junior" or "entry-level", ignore senior sources
+6. Weight sources that mention similar skills/requirements MORE heavily
 
-Use ONLY these candidate links (some may be irrelevant; pick only those that truly support the range):
+Available candidate sources (title and snippet show actual content):
 {url_block}
 
-Output STRICT JSON only (no markdown, no commentary) in this exact shape:
+Output STRICT JSON (no markdown, no commentary):
 {{
   "min_usd": <number>,
   "max_usd": <number>,
   "pay_type": "HOURLY"|"ANNUAL",
   "sources": [
     {{
-      "url": <url from the candidate links>,
+      "url": <url from candidates>,
       "range_tag": "Min"|"Max"|"General",
-      "strength": <integer 0-100>
+      "strength": <0-100>,
+      "extracted_range": "<what salary text you found in this source>"
     }}
   ],
-  "sources_used": [<url from candidate links>, ...],
-  "min_links": [<url from candidate links>, ...],
-  "max_links": [<url from candidate links>, ...]
+  "sources_used": [<urls>, ...],
+  "min_links": [<urls>, ...],
+  "max_links": [<urls>, ...]
 }}
 
 Rules:
-- min_usd <= max_usd and both realistic for the role/location/experience.
-- ALL VALUES MUST BE IN USD (convert from {local_currency} if needed)
-- For {country}: Country-level matches are VALUABLE (don't penalize lack of city-specific data)
-- Prefer sources tagged geo: Exact or Country-level. Only use Nearby/Unclear if necessary.
-- For international locations, LOCAL salary sites are MORE RELIABLE than global aggregators
-- Try to return 5–8 strong sources if available, but quality over quantity
-- Do NOT force a minimum number of sources if good sources aren't available
-- Only include a source if it materially supports the range for this role + location
-- Do NOT invent new URLs. ONLY choose from the provided candidate links
-- strength is how strong the page is as a compensation source (0-100)
-- sources_used should be a de-duplicated list of relied-upon links
+- min_usd <= max_usd, realistic for {job_title} at {exp} level in {country}
+- ALL VALUES IN USD (convert from {local_currency} if needed)
+- ONLY use sources where you can see salary data in the title/snippet
+- Experience level "{exp}" MUST affect the range (senior = higher, junior = lower)
+- "extracted_range" field proves you found actual data (e.g., "₹50K-80K/mo" or "$90K-120K annually")
+- Country-level matches are valuable for {country}
+- Local salary sites MORE reliable than global aggregators
+- Quality over quantity: 3-6 strong sources better than 10 weak ones
+- DO NOT invent URLs - only use provided candidates
+- strength = how reliable this source is (0-100)
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -1069,9 +1114,9 @@ st.markdown(
 # Form card
 # ============================================================
 with st.container(border=True):
-    st.text_input("Job Title *", key="job_title", placeholder="e.g., Visual Merchandiser")
-    st.text_input("Experience Level (optional)", key="experience_level", placeholder="e.g., Mid-level, 3–5 years")
-    st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description here...", height=130)
+    st.text_input("Job Title *", key="job_title", placeholder="e.g., Software Engineer")
+    st.text_input("Experience Level (optional)", key="experience_level", placeholder="e.g., Senior, 5+ years")
+    st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description to extract key skills...", height=130)
 
     uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
     if uploaded is not None:
@@ -1203,7 +1248,7 @@ if submitted:
             )
             
             if not candidates:
-                st.warning(f"No salary data sources found for {job_title} in {country}. Try adjusting your search criteria or check if the job title is common in this location.")
+                st.warning(f"No salary data sources found for {job_title} in {country}. Try adjusting your search criteria.")
                 st.session_state["last_result"] = None
             else:
                 result = openai_estimate(
@@ -1324,7 +1369,7 @@ if submitted:
         except Exception as e:
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
-            st.error("Something went wrong while calculating the rate range. Please try again in a moment.")
+            st.error(f"Error: {str(e)[:200]}")
 
 
 # ============================================================
@@ -1364,7 +1409,7 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("Sources are prioritized by geo match (Exact → Country-level → Nearby/Unclear) and reliability.")
+        st.caption("Sources prioritized by geo match and reliability. Range based on actual data from these sources.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
@@ -1405,8 +1450,8 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> For international locations, country-level matches are valuable. 
-              The app searches both English and local-language sources when available.
+              <strong>Note:</strong> Ranges are extracted from actual salary data in source content. 
+              Experience level and job requirements influence source selection and weighting.
             </div>
             """,
             unsafe_allow_html=True,
