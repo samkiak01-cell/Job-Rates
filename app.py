@@ -173,6 +173,19 @@ APP_CSS = """
     background: linear-gradient(90deg, rgba(109,94,252,.95), rgba(155,77,255,.95));
   }
 
+  .jr-geo-pill{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.14);
+    background: rgba(0,0,0,.18);
+    color: rgba(232,238,252,.90);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
   .jr-note{
     margin-top: 12px;
     padding: 12px 12px;
@@ -419,7 +432,7 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# Description -> lightweight keyword hint (safe for search)
+# Description -> lightweight keyword hint
 # ============================================================
 STOP_WORDS = {
     "the", "and", "or", "to", "of", "a", "an", "in", "for", "with", "on", "at", "by",
@@ -430,10 +443,6 @@ STOP_WORDS = {
 
 
 def build_search_hint(job_desc: str, experience_level: str) -> str:
-    """
-    Produces a short phrase like: 'Figma Adobe After Effects motion graphics mid level'
-    Never returns long text; designed to improve SERP relevance without breaking search.
-    """
     bits: List[str] = []
 
     exp = (experience_level or "").strip()
@@ -444,11 +453,10 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
     if not desc:
         return " ".join(bits).strip()
 
-    # Pull capitalized/tech-ish tokens and common tools, keep it short
     cleaned = re.sub(r"[^\w\s\-/&+]", " ", desc)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-    tokens = re.split(r"\s+", cleaned)[:140]  # cap
+    tokens = re.split(r"\s+", cleaned)[:140]
     keep: List[str] = []
     for t in tokens:
         tt = t.strip()
@@ -459,11 +467,9 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
             continue
         if len(tt) < 3 or len(tt) > 22:
             continue
-        # keep things that look like tools/skills: contains /, +, -, or has capitals
         if any(ch in tt for ch in ["/", "+", "-", "&"]) or (re.search(r"[A-Z]", tt) is not None):
             keep.append(tt)
         else:
-            # also keep a few meaningful normal words
             if low in {"figma", "adobe", "after", "effects", "photoshop", "illustrator", "premiere",
                        "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design"}:
                 keep.append(tt)
@@ -479,7 +485,7 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
 
 
 # ============================================================
-# Source reliability filters (lightweight, non-breaking)
+# Source reliability + geo checks
 # ============================================================
 RELIABLE_HOST_HINTS = [
     "levels.fyi",
@@ -518,14 +524,86 @@ def is_blocked_source(url: str) -> bool:
 
 
 def reliability_boost(url: str) -> int:
-    """
-    0-25 boost used only for sorting; does NOT force sources.
-    """
     h = host_of(url)
     for r in RELIABLE_HOST_HINTS:
         if r in h:
             return 25
     return 0
+
+
+def norm_loc(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def url_contains_location(url: str, token: str) -> bool:
+    if not token:
+        return True
+    t = norm_loc(token).replace(" ", "-")
+    u = url.lower()
+    return (t in u) or (norm_loc(token) in norm_loc(u))
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def page_text_contains(url: str, needle: str) -> bool:
+    """
+    Very lightweight content check (best-effort).
+    Only used on a small candidate set.
+    """
+    try:
+        if not needle:
+            return True
+        r = http_get(url, timeout=18)
+        if not r.ok:
+            return False
+        txt = r.text or ""
+        txt_low = norm_loc(txt)
+        return norm_loc(needle) in txt_low
+    except Exception:
+        return False
+
+
+def geo_tag_for_url(url: str, country: str, state: str, city: str) -> str:
+    """
+    Returns: "Exact", "Country-level", "Nearby"
+    - Exact: has country and (state/city if provided) best-effort.
+    - Country-level: has country but missing state/city (or they weren't provided).
+    - Nearby: missing country match, or missing state/city when provided.
+    """
+    c = (country or "").strip()
+    s = (state or "").strip()
+    ci = (city or "").strip()
+
+    # Require country always
+    country_ok = url_contains_location(url, c) or page_text_contains(url, c)
+    if not country_ok:
+        return "Nearby"
+
+    if not s and not ci:
+        return "Country-level"
+
+    # if city provided, require it
+    if ci:
+        city_ok = url_contains_location(url, ci) or page_text_contains(url, ci)
+        if not city_ok:
+            return "Nearby"
+
+    # if state provided, require it (unless city already matched and state isn't common on page)
+    if s:
+        state_ok = url_contains_location(url, s) or page_text_contains(url, s)
+        if not state_ok:
+            # allow if city matched and country matched (some pages omit state)
+            if ci and (url_contains_location(url, ci) or page_text_contains(url, ci)):
+                return "Exact"
+            return "Nearby"
+
+    return "Exact"
+
+
+def geo_priority(tag: str) -> int:
+    return {"Exact": 3, "Country-level": 2, "Nearby": 1}.get(tag, 0)
 
 
 # ============================================================
@@ -555,21 +633,21 @@ def serpapi_search(
 
     pay_type = rate_type_to_pay_type(rate_type)
     hint = build_search_hint(job_desc, experience_level)
-
-    # Soft hint; do not overload query
     hint_part = f' "{hint}"' if hint else ""
 
+    # Country is always explicit; if city/state chosen, keep them explicit too.
     query = (
-        f'{job_title}{hint_part} salary range {loc} '
-        f'{"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
+        f'{job_title}{hint_part} salary range "{country}" '
+        f'{"hourly rate" if pay_type=="HOURLY" else "annual salary"} '
+        f'{(" " + f"\\"{state}\\"" ) if state else ""}'
+        f'{(" " + f"\\"{city}\\"" ) if city else ""}'
     )
 
     params = {
         "engine": "google",
         "q": query,
         "api_key": serp_key,
-        "num": 25,  # more candidates helps relevance selection
-        # last ~3 months (best effort). If SerpAPI ignores it, nothing breaks.
+        "num": 30,
         "tbs": "qdr:m3",
     }
 
@@ -583,13 +661,20 @@ def serpapi_search(
         if isinstance(link, str) and link.startswith(("http://", "https://")):
             urls.append(link)
 
-    # remove obvious junk early
     urls = [u for u in urls if not is_blocked_source(u)]
 
-    # de-dupe
-    seen = set()
-    out: List[str] = []
+    # Geo filter pass:
+    # - Keep "Exact" first, then "Country-level", then a few "Nearby" (labeled later)
+    scored: List[Tuple[int, int, str]] = []
     for u in urls:
+        tag = geo_tag_for_url(u, country, state, city)
+        scored.append((geo_priority(tag), reliability_boost(u), u))
+
+    scored.sort(reverse=True)  # geo priority then reliability boost
+
+    out: List[str] = []
+    seen = set()
+    for _, __, u in scored:
         if u in seen:
             continue
         seen.add(u)
@@ -705,7 +790,6 @@ Rules:
     min_links = clean_urls(parsed.get("min_links"))
     max_links = clean_urls(parsed.get("max_links"))
 
-    # ensure everything is from candidate links
     cand = set(urls)
 
     def only_candidates(xs: List[str]) -> List[str]:
@@ -745,13 +829,11 @@ Rules:
                 else (parse_number_like(str(strength_raw)) or 55.0)
             )
             strength_int = int(max(0, min(100, round(strength_num))))
-
-            # mild boost for known reliable sources
             strength_int = int(max(0, min(100, strength_int + reliability_boost(url))))
 
             scored_sources.append({"url": url, "range_tag": range_tag, "strength": strength_int})
 
-    # dedupe scored sources by URL, keep max strength
+    # dedupe by URL, keep max strength
     best: Dict[str, Dict[str, Any]] = {}
     for s in scored_sources:
         u = s["url"]
@@ -778,8 +860,8 @@ Rules:
 def init_state():
     defaults = {
         "job_title": "",
+        "experience_level": "",
         "job_desc": "",
-        "experience_level": "",  # NEW (optional)
         "country": "",
         "state": "",  # blank = off
         "city": "",   # blank = off
@@ -949,6 +1031,7 @@ if submitted:
                 job_title, country, state, city, rate_type,
                 job_desc=job_desc, experience_level=experience_level
             )
+
             result = openai_estimate(job_title, job_desc, experience_level, country, state, city, rate_type, urls)
 
             min_usd = float(result["min_usd"])
@@ -980,7 +1063,9 @@ if submitted:
                 host, slug = pretty_url_label(u)
                 title = f"{host} — {slug}" if slug else host
                 strength = int(score_map.get(u, 55))
-                sources.append({"title": title, "url": u, "range": rng, "strength": strength})
+                strength = int(max(0, min(100, strength + reliability_boost(u))))
+                geo = geo_tag_for_url(u, country, state, city)
+                sources.append({"title": title, "url": u, "range": rng, "strength": strength, "geo": geo})
 
             for u in min_links:
                 add_source(u, "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)")
@@ -1000,17 +1085,17 @@ if submitted:
                         else:
                             rng = "Source"
                         add_source(u, rng)
-                        if len(sources) >= 10:
+                        if len(sources) >= 12:
                             break
 
             if len(sources) < 3:
                 for u in sources_used:
                     if not is_blocked_source(u):
                         add_source(u, "Source")
-                    if len(sources) >= 8:
+                    if len(sources) >= 10:
                         break
 
-            # dedupe
+            # dedupe by URL
             seen = set()
             deduped: List[Dict[str, Any]] = []
             for s in sources:
@@ -1020,8 +1105,11 @@ if submitted:
                 seen.add(u)
                 deduped.append(s)
 
-            # Sort by strength desc (so reliable sites show first), keep your cap
-            deduped.sort(key=lambda x: int(x.get("strength", 0)), reverse=True)
+            # Sort: Exact first, then Country-level, then Nearby; within each, strength desc
+            deduped.sort(
+                key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
+                reverse=True,
+            )
 
             st.session_state["last_result"] = {
                 "min": int(round(min_disp)),
@@ -1092,7 +1180,7 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("The above rate range is based on data from the following industry sources:")
+        st.caption("Sources are prioritized by location match (Exact → Country-level → Nearby) and reliability.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
@@ -1101,6 +1189,8 @@ if res:
                 title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
                 url = (s.get("url") or "").replace('"', "%22")
                 rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                geo = (s.get("geo") or "Nearby").strip()
+                geo_label = "Exact match" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby")
 
                 try:
                     strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
@@ -1114,6 +1204,7 @@ if res:
                     <div class="jr-source-main">{title}</div>
                     <div class="jr-source-sub">
                       <span>Reported Range: {rng}</span>
+                      <span class="jr-geo-pill">{geo_label}</span>
                       <span class="jr-score-pill">
                         <span>Source Strength</span>
                         <span>{strength_i}/100</span>
@@ -1130,8 +1221,8 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> These rates are estimates based on aggregated market data.
-              Actual compensation may vary based on experience, skills, company size, and other factors.
+              <strong>Note:</strong> If a location-specific salary page isn’t available for the selected city/state,
+              the app may show <em>Country-level</em> or <em>Nearby</em> sources (clearly labeled) rather than forcing incorrect matches.
             </div>
             """,
             unsafe_allow_html=True,
