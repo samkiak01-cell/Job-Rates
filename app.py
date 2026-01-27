@@ -919,7 +919,7 @@ def openai_estimate(
 
     # IMPROVED PROMPT: Forces AI to extract actual numbers from sources
     prompt = f"""
-You are a salary research analyst. Your job is to find ACTUAL salary data from the provided sources.
+You are a salary research analyst. Extract salary data from the provided sources.
 
 Job Details:
 - Job title: "{job_title}"
@@ -930,49 +930,45 @@ Job Details:
 - Pay type: "{pay_type}" (HOURLY = hourly rate; ANNUAL = yearly salary)
 
 CRITICAL INSTRUCTIONS:
-1. You MUST extract actual salary numbers that appear in the source content (titles/snippets)
-2. DO NOT estimate or infer salaries - only use explicitly stated ranges
-3. The experience level "{exp}" and requirements {requirements[:3] if requirements else []} MUST influence your range selection
-4. If experience level is "senior" or "5+ years", ignore junior/entry-level sources
-5. If experience level is "junior" or "entry-level", ignore senior sources
-6. Weight sources that mention similar skills/requirements MORE heavily
-7. RETURN ACTUAL NUMBERS - Example: if you see "$50,000 - $80,000", return min_usd: 50000, max_usd: 80000
+1. Look for salary numbers in the titles and snippets below
+2. If you see explicit numbers (e.g., "$50K-80K", "R$5000-8000"), use those
+3. If no explicit numbers but source clearly discusses "{job_title}" salary for {country}, make reasonable estimate based on:
+   - Job title and seniority level
+   - Country economic context
+   - Any partial information in snippets
+4. Experience level "{exp}" MUST affect range (senior = higher, junior = lower)
+5. Convert from {local_currency} to USD: BRL÷5, EUR×1.1, GBP×1.27, INR÷83, MXN÷17, AUD×0.65, CAD×0.74
 
-Available candidate sources (title and snippet show actual content):
+Available sources:
 {url_block}
 
-Output STRICT JSON (no markdown, no commentary):
+Output STRICT JSON (no markdown):
 {{
   "min_usd": <number (e.g., 50000)>,
   "max_usd": <number (e.g., 80000)>,
   "pay_type": "HOURLY"|"ANNUAL",
   "sources": [
     {{
-      "url": <url from candidates>,
+      "url": <url>,
       "range_tag": "Min"|"Max"|"General",
       "strength": <0-100>,
-      "extracted_range": "<what salary text you found in this source>"
+      "extracted_range": "<what you found or how you estimated>"
     }}
   ],
-  "sources_used": [<urls>, ...],
-  "min_links": [<urls>, ...],
-  "max_links": [<urls>, ...]
+  "sources_used": [<urls>],
+  "min_links": [<urls>],
+  "max_links": [<urls>]
 }}
 
-Rules:
-- min_usd <= max_usd, realistic for {job_title} at {exp} level in {country}
-- RETURN ACTUAL NUMERIC VALUES (e.g., 50000, not "50K" or "$50,000")
-- ALL VALUES IN USD (convert from {local_currency} if needed using approximate rates)
-- If sources show {local_currency}, convert: BRL÷5=USD, EUR×1.1=USD, GBP×1.27=USD, INR÷83=USD
-- ONLY use sources where you can see salary data in the title/snippet
-- Experience level "{exp}" MUST affect the range (senior = higher, junior = lower)
-- "extracted_range" field proves you found actual data (e.g., "₹50K-80K/mo" or "$90K-120K annually")
-- Country-level matches are valuable for {country}
-- Local salary sites MORE reliable than global aggregators
-- Quality over quantity: 3-6 strong sources better than 10 weak ones
-- DO NOT invent URLs - only use provided candidates
-- strength = how reliable this source is (0-100)
-- EXAMPLE VALID RESPONSE: {{"min_usd": 65000, "max_usd": 95000, "pay_type": "ANNUAL", ...}}
+Requirements:
+- Return realistic numbers for {job_title} at {exp} level in {country}
+- min_usd and max_usd must be NUMERIC (e.g., 65000, not "$65K")
+- For {pay_type}: typical range should be {"$15-50/hour" if pay_type == "HOURLY" else "$30K-$200K/year"}
+- If sources are sparse, estimate conservatively based on job title and location
+- Use at least 2-3 sources that seem relevant to {job_title}
+- "extracted_range" explains what data you found (e.g., "Snippet mentions 'competitive salary for engineers'")
+
+EXAMPLE OUTPUT: {{"min_usd": 65000, "max_usd": 95000, "pay_type": "ANNUAL", "sources": [...]}}
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
@@ -992,12 +988,15 @@ Rules:
     if not text_out:
         raise RuntimeError("OpenAI returned an empty response.")
 
+    # Store raw response for debugging
+    raw_ai_response = text_out
+
     try:
         parsed = json.loads(text_out)
     except Exception:
         m = re.search(r"\{.*\}\s*$", text_out, re.S)
         if not m:
-            raise RuntimeError("OpenAI did not return valid JSON.")
+            raise RuntimeError(f"OpenAI did not return valid JSON. Response: {text_out[:500]}")
         parsed = json.loads(m.group(0))
 
     pay_type_out = str(parsed.get("pay_type") or pay_type).upper()
@@ -1009,19 +1008,23 @@ Rules:
     
     # Debug: Show what AI returned
     if min_usd is None or max_usd is None:
-        error_msg = f"OpenAI returned invalid values: min={parsed.get('min_usd')}, max={parsed.get('max_usd')}"
+        error_msg = f"OpenAI returned invalid values: min={parsed.get('min_usd')}, max={parsed.get('max_usd')}\n\nFull response: {raw_ai_response[:1000]}"
         raise RuntimeError(error_msg)
     
     # Debug: Check before clamping
-    if min_usd == 0 or max_usd == 0:
-        error_msg = f"OpenAI returned zero values: min={min_usd}, max={max_usd}. Raw response: {text_out[:500]}"
+    if min_usd <= 0 or max_usd <= 0:
+        error_msg = f"OpenAI returned zero/negative values: min={min_usd}, max={max_usd}.\n\nThis usually means no valid salary data was found in the search results.\n\nFull AI response: {raw_ai_response[:1000]}"
         raise RuntimeError(error_msg)
+    
+    # Store original values for debugging
+    original_min = min_usd
+    original_max = max_usd
     
     min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
     
-    # Check if clamping failed
+    # Check if clamping returned error signal
     if min_usd == 0 and max_usd == 0:
-        raise RuntimeError(f"Salary range validation failed - AI may not have found valid salary data in sources")
+        raise RuntimeError(f"AI returned very low values (min={original_min}, max={original_max}) which may indicate poor quality sources. Try a more common job title or different location.\n\nAI response: {raw_ai_response[:800]}")
 
     urls = [c["url"] for c in candidates]
     cand_set = set(urls)
@@ -1275,6 +1278,9 @@ if submitted:
                 st.warning(f"No salary data sources found for {job_title} in {country}. Try adjusting your search criteria.")
                 st.session_state["last_result"] = None
             else:
+                # Debug: show how many candidates we found
+                st.info(f"Found {len(candidates)} potential sources. Analyzing...")
+                
                 result = openai_estimate(
                     job_title,
                     job_desc,
@@ -1393,7 +1399,23 @@ if submitted:
         except Exception as e:
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
-            st.error(f"Error: {str(e)[:200]}")
+            
+            # Show more helpful error message
+            error_str = str(e)
+            if "zero/negative values" in error_str or "very low values" in error_str:
+                st.error("❌ Could not find valid salary data in search results.")
+                st.warning(f"**Possible issues:**\n- Job title may be too specific or uncommon in {country}\n- Try simplifying the job title (e.g., 'Software Engineer' instead of 'Senior Full-Stack Software Engineer III')\n- Try a different location or remove state/city filters")
+                
+                # Show what sources we did find
+                if 'candidates' in locals() and candidates:
+                    with st.expander("🔍 Sources found (but no salary data detected)", expanded=False):
+                        for i, c in enumerate(candidates[:10], 1):
+                            st.markdown(f"**{i}.** [{c.get('host', 'Unknown')}]({c.get('url', '#')})")
+                            st.caption(f"Title: {c.get('title', 'N/A')[:100]}")
+                            st.caption(f"Snippet: {c.get('snippet', 'N/A')[:200]}")
+                            st.markdown("---")
+            else:
+                st.error(f"Error: {error_str[:300]}")
 
 
 # ============================================================
