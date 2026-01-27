@@ -216,7 +216,7 @@ def http_post(
 
 
 # ============================================================
-# Secrets/env helper (fix for 401)
+# Secrets/env helper
 # ============================================================
 def require_secret_or_env(name: str) -> str:
     v = (os.getenv(name, "") or "").strip()
@@ -356,6 +356,15 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
         return ("Source", "salary page")
 
 
+def get_host(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        return (urlparse(url).hostname or "").replace("www.", "").lower()
+    except Exception:
+        return ""
+
+
 # ============================================================
 # Parsing helpers
 # ============================================================
@@ -419,44 +428,31 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# Job description: robust short "hint" builder for search
+# Job description: short hint for search + ranking
 # ============================================================
 def make_desc_hint(job_desc: str, *, max_chars: int = 90) -> str:
-    """
-    Produces a short, search-friendly hint extracted from the job description.
-    Goal: steer SerpAPI results without overfitting/adding noise.
-    """
     if not job_desc:
         return ""
-
     t = job_desc.strip()
     if len(t) < 8:
         return ""
-
-    # Collapse whitespace and remove noisy punctuation
     t = re.sub(r"\s+", " ", t)
-    t = re.sub(r"[^\w\s\-/&+]", " ", t)  # keep words and some separators
+    t = re.sub(r"[^\w\s\-/&+]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
 
-    # If the user typed something like "mid level video designer", keep it
-    # Else if it's a full JD, take the first sentence-ish chunk
-    # and remove common boilerplate words that pollute search.
     boiler = {
         "responsibilities", "requirements", "qualification", "qualifications",
         "about", "company", "role", "position", "job", "summary", "overview",
         "benefits", "equal", "opportunity", "employer", "apply", "applying",
     }
 
-    # Take a reasonably short prefix
     snippet = t[: max_chars * 2]
-    # Tokenize-ish
     words = [w for w in re.split(r"\s+", snippet) if w]
     cleaned_words: List[str] = []
     for w in words:
         lw = w.lower()
         if lw in boiler:
             continue
-        # avoid giant tokens
         if len(w) > 28:
             continue
         cleaned_words.append(w)
@@ -465,12 +461,79 @@ def make_desc_hint(job_desc: str, *, max_chars: int = 90) -> str:
 
     hint = " ".join(cleaned_words).strip()
     if len(hint) < 8:
-        # fallback: just take the first line fragment
         hint = t[:max_chars].strip()
 
-    # Final trim
-    hint = hint[:max_chars].strip()
-    return hint
+    return hint[:max_chars].strip()
+
+
+# ============================================================
+# Source quality gates (stops irrelevant sources from showing)
+# ============================================================
+GOOD_DOMAIN_HINTS = [
+    "levels.fyi",
+    "glassdoor.",
+    "indeed.",
+    "salary.com",
+    "payscale.",
+    "builtin.com",
+    "ziprecruiter.",
+    "linkedin.",
+    "monster.",
+    "talent.com",
+    "hays.",
+    "roberthalf.",
+    "randstad.",
+    "michaelpage.",
+]
+
+BAD_DOMAIN_HINTS = [
+    "pinterest.",
+    "facebook.",
+    "instagram.",
+    "tiktok.",
+    "youtube.",
+    "reddit.",          # can be useful, but very often messy for comp justification
+    "quora.",
+    "medium.",          # too noisy
+    "github.",          # not salary
+    "wikipedia.",       # not salary
+    "slideshare.",
+]
+
+
+def domain_quality_score(url: str) -> int:
+    host = get_host(url)
+    if not host:
+        return 40
+
+    for b in BAD_DOMAIN_HINTS:
+        if b in host:
+            return 20
+
+    for g in GOOD_DOMAIN_HINTS:
+        if g in host:
+            return 85
+
+    # default, unknown host
+    return 55
+
+
+def overlaps_range(a_min: float, a_max: float, b_min: float, b_max: float, tol: float = 0.12) -> bool:
+    """
+    Returns True if ranges overlap with tolerance.
+    tol=0.12 means we allow ~12% wiggle room.
+    """
+    if a_min > a_max:
+        a_min, a_max = a_max, a_min
+    if b_min > b_max:
+        b_min, b_max = b_max, b_min
+
+    # widen the "b" range a bit to avoid over-filtering
+    widen = max(1.0, (b_max - b_min) * tol)
+    b_min2 = b_min - widen
+    b_max2 = b_max + widen
+
+    return not (a_max < b_min2 or a_min > b_max2)
 
 
 # ============================================================
@@ -492,12 +555,6 @@ def serpapi_search(
     city: str,
     rate_type: str,
 ) -> List[str]:
-    """
-    Robust version:
-    - Uses job_desc as a *light* modifier if present
-    - Keeps search query short + focused to improve source relevance
-    - Pulls a bit more results, then de-dupes
-    """
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
 
     location_bits = [b for b in [city, state, country] if b]
@@ -506,17 +563,24 @@ def serpapi_search(
     pay_type = rate_type_to_pay_type(rate_type)
     desc_hint = make_desc_hint(job_desc, max_chars=80)
 
-    # Put the description hint AFTER title so title remains the primary intent.
-    # Wrap hint in quotes to keep it from exploding the query.
     hint_block = f' "{desc_hint}"' if desc_hint else ""
 
-    query = f'{job_title}{hint_block} salary range {loc} {"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
+    # Bias query toward well-known comp sources without hard restricting.
+    # Also add "compensation add-ons" to pull pages that include ranges.
+    quality_bias = " (site:levels.fyi OR site:glassdoor.com OR site:salary.com OR site:payscale.com OR site:indeed.com OR site:builtin.com)"
+    query = (
+        f'{job_title}{hint_block} salary range {loc} '
+        f'{"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
+        f'{quality_bias}'
+    )
 
     params = {
         "engine": "google",
         "q": query,
         "api_key": serp_key,
-        "num": 20,
+        "num": 25,
+        # last ~3 months
+        "tbs": "qdr:m3",
     }
 
     r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
@@ -537,7 +601,7 @@ def serpapi_search(
         seen.add(u)
         out.append(u)
 
-    return out[:20]
+    return out[:22]
 
 
 def openai_estimate(
@@ -555,8 +619,7 @@ def openai_estimate(
     location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
-    # Give the model more candidates so it can choose 5+ *if possible*.
-    url_block = "\n".join(f"- {u}" for u in urls[:18]) if urls else "- (no links found)"
+    url_block = "\n".join(f"- {u}" for u in urls[:20]) if urls else "- (no links found)"
 
     prompt = f"""
 You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
@@ -566,45 +629,40 @@ Task:
 - Job description (optional): "{job_desc or ""}"
 - Location: "{loc}"
 - Pay type: "{pay_type}" (HOURLY means hourly rate; ANNUAL means yearly salary)
-- Consider only listings/open postings within the last ~3 months (best effort).
+- Consider only postings/pages that appear updated/valid within the last ~3 months (best effort).
 
-Use these candidate links (some may be irrelevant; pick only those that truly support the range):
+Use these candidate links ONLY (do not invent new URLs):
 {url_block}
 
 Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 {{
-  "min_usd": <number>,
-  "max_usd": <number>,
   "pay_type": "HOURLY"|"ANNUAL",
-
   "sources": [
     {{
-      "url": <url>,
-      "range_tag": "Min"|"Max"|"General",
-      "strength": <integer 0-100>
+      "url": <one of the candidate urls>,
+      "scope": "local"|"national"|"unknown",
+      "quoted_min_usd": <number or null>,
+      "quoted_max_usd": <number or null>,
+      "quoted_point_usd": <number or null>,
+      "strength": <integer 0-100>,
+      "notes": <short string>
     }}
-  ],
-
-  "sources_used": [<url>, ...],
-  "min_links": [<url>, ...],
-  "max_links": [<url>, ...]
+  ]
 }}
 
 Rules:
-- min_usd must be <= max_usd and both realistic for the role/location.
-- Prefer returning 5–8 strong sources if (and only if) 5–8 clearly relevant, reputable sources exist in the candidate links.
+- Prefer returning 5–8 strong sources if (and only if) 5–8 clearly relevant, reputable sources exist in the candidates.
 - Do NOT force a minimum number of sources.
-- Only include a source if it materially supports the range for this role + location.
-- Avoid low-quality or irrelevant sources.
+- Only include sources that mention an actual numeric compensation figure/range for this role (or very close title) and this location or clearly-labeled scope.
+- If a page only gives a single estimate, put it in quoted_point_usd and leave min/max null.
+- If you can’t reliably extract numbers, do not include that source.
 - strength is how strong the page is as a compensation source (0-100).
-- min_links and max_links: 0–5 each when it makes sense (do not pad with weak links).
-- sources_used should be a de-duplicated list of relied-upon links.
 """.strip()
 
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
     payload = {"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "input": prompt, "temperature": 0}
 
-    resp = http_post("https://api.openai.com/v1/responses", json_body=payload, timeout=60, headers=headers)
+    resp = http_post("https://api.openai.com/v1/responses", json_body=payload, timeout=70, headers=headers)
     resp.raise_for_status()
     data = resp.json()
 
@@ -630,58 +688,112 @@ Rules:
     if pay_type_out not in ("HOURLY", "ANNUAL"):
         pay_type_out = pay_type
 
-    min_usd = parse_number_like(parsed.get("min_usd"))
-    max_usd = parse_number_like(parsed.get("max_usd"))
-    if min_usd is None or max_usd is None:
-        raise RuntimeError("OpenAI returned invalid min/max values.")
+    cand_set = set(urls)
 
-    min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
-
-    sources_used = clean_urls(parsed.get("sources_used"))
-    min_links = clean_urls(parsed.get("min_links"))
-    max_links = clean_urls(parsed.get("max_links"))
-
-    scored_sources: List[Dict[str, Any]] = []
     raw_sources = parsed.get("sources")
-    if isinstance(raw_sources, list):
-        for item in raw_sources:
-            if not isinstance(item, dict):
-                continue
-            url = item.get("url")
-            if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
-                continue
+    if not isinstance(raw_sources, list):
+        raw_sources = []
 
-            range_tag = str(item.get("range_tag") or "General").strip()
-            if range_tag not in ("Min", "Max", "General"):
-                range_tag = "General"
-
-            strength_raw = item.get("strength")
-            strength_num = (
-                float(strength_raw)
-                if isinstance(strength_raw, (int, float))
-                else (parse_number_like(str(strength_raw)) or 55.0)
-            )
-            strength_int = int(max(0, min(100, round(strength_num))))
-            scored_sources.append({"url": url.strip(), "range_tag": range_tag, "strength": strength_int})
-
-    # dedupe scored sources by URL
-    seen = set()
-    dedup_scored: List[Dict[str, Any]] = []
-    for s in scored_sources:
-        u = s["url"]
-        if u in seen:
+    cleaned_sources: List[Dict[str, Any]] = []
+    for item in raw_sources:
+        if not isinstance(item, dict):
             continue
-        seen.add(u)
-        dedup_scored.append(s)
+        url = item.get("url")
+        if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
+            continue
+        url = url.strip()
+        if url not in cand_set:
+            # hard block invented URLs
+            continue
+
+        scope = str(item.get("scope") or "unknown").strip().lower()
+        if scope not in ("local", "national", "unknown"):
+            scope = "unknown"
+
+        qmin = parse_number_like(item.get("quoted_min_usd"))
+        qmax = parse_number_like(item.get("quoted_max_usd"))
+        qpt = parse_number_like(item.get("quoted_point_usd"))
+
+        # Require numeric
+        if qmin is None and qmax is None and qpt is None:
+            continue
+
+        # Convert point into a narrow range for later overlap checks
+        if qpt is not None and (qmin is None and qmax is None):
+            qmin = float(qpt) * 0.92
+            qmax = float(qpt) * 1.08
+
+        if qmin is None:
+            qmin = qmax
+        if qmax is None:
+            qmax = qmin
+        if qmin is None or qmax is None:
+            continue
+
+        qmin, qmax = clamp_min_max(float(qmin), float(qmax), pay_type_out)
+
+        strength_raw = item.get("strength")
+        strength_num = (
+            float(strength_raw)
+            if isinstance(strength_raw, (int, float))
+            else (parse_number_like(str(strength_raw)) or 55.0)
+        )
+        strength_i = int(max(0, min(100, round(strength_num))))
+
+        # combine with domain heuristic to reduce random sites
+        dq = domain_quality_score(url)
+        strength_i = int(round(0.7 * strength_i + 0.3 * dq))
+
+        notes = str(item.get("notes") or "").strip()[:140]
+
+        cleaned_sources.append(
+            {
+                "url": url,
+                "scope": scope,
+                "quoted_min_usd": float(qmin),
+                "quoted_max_usd": float(qmax),
+                "strength": strength_i,
+                "notes": notes,
+            }
+        )
+
+    # dedupe (keep strongest)
+    by_url: Dict[str, Dict[str, Any]] = {}
+    for s in cleaned_sources:
+        u = s["url"]
+        if u not in by_url or int(s["strength"]) > int(by_url[u]["strength"]):
+            by_url[u] = s
+    cleaned_sources = list(by_url.values())
+
+    # Sort: strongest first, prefer local
+    cleaned_sources.sort(key=lambda x: (0 if x["scope"] == "local" else 1, -int(x["strength"])))
+
+    # Recompute final range from sources to ensure consistency.
+    # Use top 3-8 sources with numbers.
+    usable = cleaned_sources[:8]
+    mins = [float(s["quoted_min_usd"]) for s in usable]
+    maxs = [float(s["quoted_max_usd"]) for s in usable]
+    if not mins or not maxs:
+        raise RuntimeError("No usable sources with numeric ranges were returned.")
+
+    min_usd = min(mins)
+    max_usd = max(maxs)
+    min_usd, max_usd = clamp_min_max(min_usd, max_usd, pay_type_out)
+
+    # Enforce: drop sources that do not overlap the computed final range
+    filtered: List[Dict[str, Any]] = []
+    for s in cleaned_sources:
+        if overlaps_range(float(s["quoted_min_usd"]), float(s["quoted_max_usd"]), min_usd, max_usd, tol=0.10):
+            filtered.append(s)
+
+    # keep up to 12, but prefer 5-8 if available
+    filtered = filtered[:12]
 
     return {
         "min_usd": int(round(min_usd)),
         "max_usd": int(round(max_usd)),
         "pay_type": pay_type_out,
-        "sources_used": sources_used,
-        "min_links": min_links,
-        "max_links": max_links,
-        "scored_sources": dedup_scored,
+        "sources": filtered,
     }
 
 
@@ -731,7 +843,7 @@ st.markdown(
 
 
 # ============================================================
-# Form card (everything inside the box)
+# Form card
 # ============================================================
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
@@ -765,7 +877,6 @@ with st.container(border=True):
         format_func=lambda x: "— Select —" if x == "" else x,
     )
 
-    # Build state list (blank option at top)
     states = []
     if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
         states = get_states_for_country(st.session_state["country"]) or []
@@ -785,7 +896,6 @@ with st.container(border=True):
             format_func=lambda x: "— Leave blank —" if x == "" else x,
         )
 
-    # Build city list (blank option at top)
     cities = []
     if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
         cities = get_cities(st.session_state["country"], st.session_state["state"]) or []
@@ -851,14 +961,12 @@ if submitted:
             job_title = st.session_state["job_title"].strip()
             job_desc = (st.session_state["job_desc"] or "").strip()
             country = st.session_state["country"].strip()
-            state = (st.session_state["state"] or "").strip()  # blank allowed
-            city = (st.session_state["city"] or "").strip()    # blank allowed
+            state = (st.session_state["state"] or "").strip()
+            city = (st.session_state["city"] or "").strip()
             rate_type = st.session_state["rate_type"]
             currency = st.session_state["currency"]
 
-            # IMPORTANT: serp search now uses job_desc hint
             urls = serpapi_search(job_title, job_desc, country, state, city, rate_type)
-
             result = openai_estimate(job_title, job_desc, country, state, city, rate_type, urls)
 
             min_usd = float(result["min_usd"])
@@ -871,70 +979,44 @@ if submitted:
                 min_disp = convert_from_usd(min_usd, currency)
                 max_disp = convert_from_usd(max_usd, currency)
 
-            scored = result.get("scored_sources") or []
-            score_map: Dict[str, int] = {}
-            tag_map: Dict[str, str] = {}
-            for item in scored:
-                if isinstance(item, dict) and isinstance(item.get("url"), str):
-                    u = item["url"].strip()
-                    if u:
-                        score_map[u] = int(item.get("strength", 55))
-                        tag_map[u] = str(item.get("range_tag", "General"))
+            sources_in = result.get("sources") or []
 
-            sources: List[Dict[str, Any]] = []
-            min_links = result.get("min_links") or []
-            max_links = result.get("max_links") or []
-            sources_used = result.get("sources_used") or []
-
-            def add_source(u: str, rng: str):
+            # Build UI sources; always consistent with computed min/max.
+            sources_ui: List[Dict[str, Any]] = []
+            for s in sources_in:
+                u = s.get("url") or ""
+                if not u:
+                    continue
                 host, slug = pretty_url_label(u)
                 title = f"{host} — {slug}" if slug else host
-                strength = int(score_map.get(u, 55))
-                sources.append({"title": title, "url": u, "range": rng, "strength": strength})
 
-            for u in min_links:
-                add_source(u, "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)")
-            for u in max_links:
-                add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
+                strength = int(s.get("strength", domain_quality_score(u)))
+                strength = int(max(0, min(100, strength)))
 
-            # Prefer 5+ only if we truly have them: fill from scored, then sources_used
-            if len(sources) < 5:
-                for item in scored:
-                    u = item.get("url")
-                    if isinstance(u, str) and u.startswith(("http://", "https://")):
-                        tag = tag_map.get(u, "General")
-                        if tag == "Min":
-                            rng = "Min (Annual)" if pay_type == "ANNUAL" else "Min (Hourly)"
-                        elif tag == "Max":
-                            rng = "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)"
-                        else:
-                            rng = "Source"
-                        add_source(u, rng)
-                        if len(sources) >= 12:
-                            break
+                # Tag what the page supports relative to final range (informational)
+                qmin = float(s.get("quoted_min_usd", min_usd))
+                qmax = float(s.get("quoted_max_usd", max_usd))
+                tag = "Source"
+                if abs(qmin - min_usd) <= max(1.0, (max_usd - min_usd) * 0.10):
+                    tag = "Min-ish"
+                if abs(qmax - max_usd) <= max(1.0, (max_usd - min_usd) * 0.10):
+                    tag = "Max-ish"
 
-            if len(sources) < 3:
-                for u in sources_used:
-                    add_source(u, "Source")
-                    if len(sources) >= 12:
-                        break
-
-            # dedupe
-            seen = set()
-            deduped: List[Dict[str, Any]] = []
-            for s in sources:
-                u = s.get("url")
-                if not u or u in seen:
-                    continue
-                seen.add(u)
-                deduped.append(s)
+                sources_ui.append(
+                    {
+                        "title": title,
+                        "url": u,
+                        "range": tag,
+                        "strength": strength,
+                    }
+                )
 
             st.session_state["last_result"] = {
                 "min": int(round(min_disp)),
                 "max": int(round(max_disp)),
                 "currency": currency.upper(),
                 "rateType": pay_type_to_rate_type(pay_type),
-                "sources": deduped[:12],
+                "sources": sources_ui[:12],
             }
 
         except requests.HTTPError as e:
@@ -998,7 +1080,7 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("The above rate range is based on data from the following industry sources:")
+        st.caption("These sources are filtered to ensure they align with the estimated range.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
@@ -1019,7 +1101,7 @@ if res:
                   <div style="min-width:0; width:100%;">
                     <div class="jr-source-main">{title}</div>
                     <div class="jr-source-sub">
-                      <span>Reported Range: {rng}</span>
+                      <span>Supports: {rng}</span>
                       <span class="jr-score-pill">
                         <span>Source Strength</span>
                         <span>{strength_i}/100</span>
@@ -1036,8 +1118,8 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> These rates are estimates based on aggregated market data.
-              Actual compensation may vary based on experience, skills, company size, and other factors.
+              <strong>Note:</strong> The range is computed from the returned sources (not independently),
+              and sources are filtered to match the range.
             </div>
             """,
             unsafe_allow_html=True,
