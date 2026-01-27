@@ -19,9 +19,6 @@ st.set_page_config(page_title="Job Rate Finder", page_icon="💼", layout="cente
 
 # ============================================================
 # Styling (UI only)
-# NOTE: We do NOT try to wrap widgets in raw <div> tags because Streamlit
-# doesn’t guarantee HTML wrappers will contain interactive widgets.
-# Instead, we style Streamlit containers and our markdown blocks.
 # ============================================================
 APP_CSS = """
 <style>
@@ -60,7 +57,7 @@ APP_CSS = """
     font-size: 15px;
   }
 
-  /* Streamlit "container border" card styling */
+  /* Streamlit card containers */
   div[data-testid="stContainer"]{
     background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
     border: 1px solid var(--border) !important;
@@ -68,12 +65,10 @@ APP_CSS = """
     box-shadow: var(--shadow);
     backdrop-filter: blur(10px);
   }
-  /* tighten inner padding a bit */
-  div[data-testid="stContainer"] > div{
-    padding: 12px 14px 14px 14px;
-  }
+  div[data-testid="stContainer"] > div{ padding: 12px 14px 14px 14px; }
 
   label, .stMarkdown p { color: var(--muted) !important; }
+
   .stTextInput input, .stTextArea textarea{
     background: rgba(0,0,0,.28) !important;
     border: 1px solid var(--border) !important;
@@ -99,6 +94,7 @@ APP_CSS = """
   }
   .stButton button:hover{ filter: brightness(1.05); }
 
+  /* Range block */
   .jr-range{
     background: linear-gradient(90deg, var(--accent), var(--accent2));
     border-radius: 16px;
@@ -108,34 +104,15 @@ APP_CSS = """
     border: 1px solid rgba(255,255,255,.10);
     margin-top: 16px;
   }
-  .jr-range-top{
-    display:flex;
-    gap:12px;
-    align-items:center;
-    margin-bottom: 10px;
-  }
+  .jr-range-top{ display:flex; gap:12px; align-items:center; margin-bottom: 10px; }
   .jr-range-title{ font-size: 18px; font-weight: 800; margin:0; }
   .jr-range-grid{ display:flex; align-items:flex-end; gap: 22px; }
-  .jr-range-label{
-    font-size: 12px;
-    color: rgba(255,255,255,.75);
-    margin:0 0 2px 0;
-  }
+  .jr-range-label{ font-size: 12px; color: rgba(255,255,255,.75); margin:0 0 2px 0; }
   .jr-range-amt{ font-size: 34px; font-weight: 900; margin: 0; line-height: 1.05; }
   .jr-range-unit{ font-size: 12px; color: rgba(255,255,255,.75); margin: 3px 0 0 0; }
   .jr-dash{ font-size: 26px; color: rgba(255,255,255,.70); margin: 0 2px; padding-bottom: 12px; }
 
-  .jr-sources-card{
-    background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px 18px;
-    box-shadow: var(--shadow);
-    margin-top: 14px;
-  }
-  .jr-sources-title{ font-size: 18px; font-weight: 800; margin: 0 0 6px 0; color: var(--text); }
-  .jr-sources-sub{ color: var(--muted); margin: 0 0 12px 0; font-size: 13px; }
-
+  /* Sources rows */
   .jr-source{
     display:flex;
     gap: 12px;
@@ -228,14 +205,18 @@ def http_get(url: str, *, timeout: int = 25, params: Optional[dict] = None) -> r
     return SESSION.get(url, timeout=timeout, params=params)
 
 
-def http_post(url: str, *, timeout: int = 25, json_body: Optional[dict] = None, headers: Optional[dict] = None) -> requests.Response:
+def http_post(
+    url: str,
+    *,
+    timeout: int = 25,
+    json_body: Optional[dict] = None,
+    headers: Optional[dict] = None,
+) -> requests.Response:
     return SESSION.post(url, timeout=timeout, json=json_body, headers=headers)
 
 
 # ============================================================
-# Secrets/env helper (FIX for your 401)
-# Streamlit deployments often store keys in st.secrets, not os.environ.
-# This function checks BOTH.
+# Secrets/env helper (fix for 401)
 # ============================================================
 def require_secret_or_env(name: str) -> str:
     v = (os.getenv(name, "") or "").strip()
@@ -245,20 +226,21 @@ def require_secret_or_env(name: str) -> str:
         except Exception:
             v = ""
     if not v:
-        raise RuntimeError(f"Missing API key/config: {name}. Set it in Streamlit Secrets or environment variables.")
+        raise RuntimeError(
+            f"Missing API key/config: {name}. Set it in Streamlit Secrets or environment variables."
+        )
     return v
 
 
 # ============================================================
-# Helpers: Geo dropdowns (CountriesNow - no key required)
+# Geo dropdowns (CountriesNow)
 # ============================================================
 COUNTRIESNOW_BASE = "https://countriesnow.space/api/v0.1"
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_country_list() -> List[str]:
-    url = f"{COUNTRIESNOW_BASE}/countries"
-    r = http_get(url, timeout=25)
+    r = http_get(f"{COUNTRIESNOW_BASE}/countries", timeout=25)
     r.raise_for_status()
     data = r.json()
     countries: List[str] = []
@@ -274,8 +256,7 @@ def get_states_for_country(country: str) -> List[str]:
     try:
         if not country:
             return ["N/A"]
-        url = f"{COUNTRIESNOW_BASE}/countries/states"
-        r = http_post(url, json_body={"country": country}, timeout=25)
+        r = http_post(f"{COUNTRIESNOW_BASE}/countries/states", json_body={"country": country}, timeout=25)
         if not r.ok:
             return ["N/A"]
         data = r.json()
@@ -297,8 +278,7 @@ def get_cities(country: str, state: str) -> List[str]:
             return ["N/A"]
 
         if not state or state == "N/A":
-            url = f"{COUNTRIESNOW_BASE}/countries/cities"
-            r = http_post(url, json_body={"country": country}, timeout=25)
+            r = http_post(f"{COUNTRIESNOW_BASE}/countries/cities", json_body={"country": country}, timeout=25)
             if not r.ok:
                 return ["N/A"]
             data = r.json()
@@ -307,8 +287,11 @@ def get_cities(country: str, state: str) -> List[str]:
             cities = sorted(set(cities), key=lambda x: x.lower())
             return cities if cities else ["N/A"]
 
-        url = f"{COUNTRIESNOW_BASE}/countries/state/cities"
-        r = http_post(url, json_body={"country": country, "state": state}, timeout=25)
+        r = http_post(
+            f"{COUNTRIESNOW_BASE}/countries/state/cities",
+            json_body={"country": country, "state": state},
+            timeout=25,
+        )
         if not r.ok:
             return ["N/A"]
         data = r.json()
@@ -321,7 +304,7 @@ def get_cities(country: str, state: str) -> List[str]:
 
 
 # ============================================================
-# Helpers: FX conversion (free)
+# FX conversion
 # ============================================================
 @st.cache_data(ttl=60 * 60, show_spinner=False)
 def get_fx_table_usd() -> Dict[str, float]:
@@ -344,7 +327,7 @@ def convert_from_usd(amount: float, to_ccy: str) -> float:
 
 
 # ============================================================
-# Helpers: URL label (Edit 7)
+# URL label helper
 # ============================================================
 def pretty_url_label(raw_url: str) -> Tuple[str, str]:
     try:
@@ -369,14 +352,13 @@ def pretty_url_label(raw_url: str) -> Tuple[str, str]:
 
 
 # ============================================================
-# Edit 6: sanitize parsing helpers
+# Parsing helpers
 # ============================================================
 def parse_number_like(x: Any) -> Optional[float]:
     if x is None:
         return None
     if isinstance(x, (int, float)) and math.isfinite(float(x)):
         return float(x)
-
     if not isinstance(x, str):
         return None
 
@@ -414,7 +396,6 @@ def clamp_min_max(min_v: float, max_v: float, pay_type: str) -> Tuple[float, flo
 
     if min_v > max_v:
         min_v, max_v = max_v, min_v
-
     return min_v, max_v
 
 
@@ -433,10 +414,7 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# AI logic (SerpAPI + OpenAI)
-# Edit 8: consistent pay_type mapping
-# Edit 9: prefer ~5 sources when possible
-# Edit 10: source strength 0-100
+# AI logic
 # ============================================================
 def rate_type_to_pay_type(rate_type: str) -> str:
     return "HOURLY" if (rate_type or "").strip().lower() == "hourly" else "ANNUAL"
@@ -455,9 +433,7 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
     pay_type = rate_type_to_pay_type(rate_type)
     query = f'{job_title} salary range {loc} {"hourly rate" if pay_type=="HOURLY" else "annual salary"}'
 
-    # pull more candidates to enable ~5 strong sources
     params = {"engine": "google", "q": query, "api_key": serp_key, "num": 15}
-
     r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
     r.raise_for_status()
     data = r.json()
@@ -538,7 +514,6 @@ Rules:
 - sources_used should be a de-duplicated list of relied-upon links.
 """.strip()
 
-    # Responses API
     headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
     payload = {"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"), "input": prompt, "temperature": 0}
 
@@ -547,8 +522,8 @@ Rules:
     data = resp.json()
 
     text_out = ""
-    for o in data.get("output", []) or []:
-        for c in o.get("content", []) or []:
+    for o in (data.get("output", []) or []):
+        for c in (o.get("content", []) or []):
             if c.get("type") == "output_text":
                 text_out += c.get("text", "")
 
@@ -594,16 +569,13 @@ Rules:
                 range_tag = "General"
 
             strength_raw = item.get("strength")
-            strength_num = parse_number_like(str(strength_raw)) if not isinstance(strength_raw, (int, float)) else float(strength_raw)
-            if strength_num is None:
-                strength_num = 50.0
+            strength_num = (
+                float(strength_raw)
+                if isinstance(strength_raw, (int, float))
+                else (parse_number_like(str(strength_raw)) or 50.0)
+            )
             strength_int = int(max(0, min(100, round(strength_num))))
-
             scored_sources.append({"url": url.strip(), "range_tag": range_tag, "strength": strength_int})
-
-    if not scored_sources and sources_used:
-        for u in sources_used[:6]:
-            scored_sources.append({"url": u, "range_tag": "General", "strength": 55})
 
     # dedupe scored sources by URL
     seen = set()
@@ -665,12 +637,14 @@ def on_state_change():
 # Header
 # ============================================================
 st.markdown('<div class="jr-title">Job Rate Finder</div>', unsafe_allow_html=True)
-st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="jr-subtitle">Get competitive salary and hourly rate information for any position</div>',
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
-# Form card (FIXED layout)
-# We use a Streamlit container with border=True so everything is truly "in the box".
+# Form card (everything truly inside the box)
 # ============================================================
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
@@ -703,11 +677,9 @@ with st.container(border=True):
         on_change=on_country_change,
     )
 
-    # states/cities
     state_options = ["N/A"]
     if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
         state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
-
     if st.session_state["state"] not in state_options:
         st.session_state["state"] = "N/A"
 
@@ -757,7 +729,6 @@ with st.container(border=True):
         key="currency",
     )
 
-    # Edit 3: disable button until valid
     def is_valid() -> Tuple[bool, str]:
         if not (st.session_state["job_title"] or "").strip():
             return False, "Job Title is required."
@@ -788,7 +759,7 @@ if submitted:
             country = st.session_state["country"].strip()
             state = (st.session_state["state"] or "N/A").strip()
             city = (st.session_state["city"] or "N/A").strip()
-            rate_type = st.session_state["rate_type"]  # "salary" or "hourly"
+            rate_type = st.session_state["rate_type"]
             currency = st.session_state["currency"]
 
             urls = serpapi_search(job_title, country, state, city, rate_type)
@@ -804,7 +775,6 @@ if submitted:
                 min_disp = convert_from_usd(min_usd, currency)
                 max_disp = convert_from_usd(max_usd, currency)
 
-            # map strengths
             scored = result.get("scored_sources") or []
             score_map: Dict[str, int] = {}
             tag_map: Dict[str, str] = {}
@@ -815,7 +785,6 @@ if submitted:
                         score_map[u] = int(item.get("strength", 55))
                         tag_map[u] = str(item.get("range_tag", "General"))
 
-            # build sources list
             sources: List[Dict[str, Any]] = []
             min_links = result.get("min_links") or []
             max_links = result.get("max_links") or []
@@ -832,7 +801,7 @@ if submitted:
             for u in max_links:
                 add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
 
-            # Edit 9: prefer ~5 sources (fill from scored or sources_used)
+            # Prefer ~5 sources: fill from scored, then sources_used
             if len(sources) < 5:
                 for item in scored:
                     u = item.get("url")
@@ -873,7 +842,6 @@ if submitted:
             }
 
         except requests.HTTPError as e:
-            # If auth fails, show a targeted message
             st.session_state["last_result"] = None
             st.session_state["debug_last_error"] = repr(e)
 
@@ -899,6 +867,9 @@ if submitted:
 
 # ============================================================
 # Render results
+# FIX for your “raw HTML showing as code”:
+# We render each source row with st.markdown(..., unsafe_allow_html=True)
+# inside a real Streamlit container (not one giant HTML blob).
 # ============================================================
 res = st.session_state.get("last_result")
 if res:
@@ -932,51 +903,53 @@ if res:
 
     sources: List[Dict[str, Any]] = res.get("sources") or []
 
-    sources_html = """
-    <div class="jr-sources-card">
-      <div class="jr-sources-title">Rate Justification Sources</div>
-      <div class="jr-sources-sub">The above rate range is based on data from the following industry sources:</div>
-    """
+    with st.container(border=True):
+        st.markdown("### Rate Justification Sources")
+        st.caption("The above rate range is based on data from the following industry sources:")
 
-    if not sources:
-        sources_html += '<div style="color:var(--muted);font-size:13px;">No sources were returned confidently for this query.</div>'
-    else:
-        for s in sources:
-            title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-            url = (s.get("url") or "").replace('"', "%22")
-            rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+        if not sources:
+            st.caption("No sources were returned confidently for this query.")
+        else:
+            for s in sources:
+                title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                url = (s.get("url") or "").replace('"', "%22")
+                rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
 
-            try:
-                strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
-            except Exception:
-                strength_i = 55
+                try:
+                    strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
+                except Exception:
+                    strength_i = 55
 
-            sources_html += f"""
-              <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                <div class="jr-source-ico">↗</div>
-                <div style="min-width:0; width:100%;">
-                  <div class="jr-source-main">{title}</div>
-                  <div class="jr-source-sub">
-                    <span>Reported Range: {rng}</span>
-                    <span class="jr-score-pill">
-                      <span>Source Strength</span>
-                      <span>{strength_i}/100</span>
-                      <span class="jr-score-bar">
-                        <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                row_html = f"""
+                <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+                  <div class="jr-source-ico">↗</div>
+                  <div style="min-width:0; width:100%;">
+                    <div class="jr-source-main">{title}</div>
+                    <div class="jr-source-sub">
+                      <span>Reported Range: {rng}</span>
+                      <span class="jr-score-pill">
+                        <span>Source Strength</span>
+                        <span>{strength_i}/100</span>
+                        <span class="jr-score-bar">
+                          <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                        </span>
                       </span>
-                    </span>
+                    </div>
                   </div>
-                </div>
-              </a>
+                </a>
+                """
+                st.markdown(row_html, unsafe_allow_html=True)
+
+        st.markdown(
             """
+            <div class="jr-note">
+              <strong>Note:</strong> These rates are estimates based on aggregated market data.
+              Actual compensation may vary based on experience, skills, company size, and other factors.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    sources_html += """
-      <div class="jr-note"><strong>Note:</strong> These rates are estimates based on aggregated market data. Actual compensation may vary based on experience, skills, company size, and other factors.</div>
-    </div>
-    """
-    st.markdown(sources_html, unsafe_allow_html=True)
-
-# Debug details (optional)
 if st.session_state.get("debug_last_error"):
     with st.expander("Debug details", expanded=False):
         st.code(st.session_state["debug_last_error"])
