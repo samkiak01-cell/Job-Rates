@@ -386,8 +386,6 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
     loc = ", ".join(location_bits) if location_bits else country
 
-    # Focus on salary range signals. Keep query natural.
-    # Also include "last 3 months" constraint in prompt to OpenAI later; search uses recency-ish terms.
     query = f'{job_title} salary range {loc} {"hourly rate" if rate_type=="hourly" else "annual salary"}'
     params = {
         "engine": "google",
@@ -406,7 +404,6 @@ def serpapi_search(job_title: str, country: str, state: str, city: str, rate_typ
         if isinstance(link, str) and link.startswith("http"):
             urls.append(link)
 
-    # de-dupe preserving order
     seen = set()
     out = []
     for u in urls:
@@ -431,13 +428,11 @@ def openai_estimate(job_title: str, job_desc: str, country: str, state: str, cit
     """
     openai_key = require_env("OPENAI_API_KEY")
 
-    # Prefer "ANNUAL"/"HOURLY" tokens for downstream compatibility
     pay_type = "HOURLY" if rate_type == "hourly" else "ANNUAL"
 
     location_bits = [b for b in [city, state, country] if b and b != "N/A"]
     loc = ", ".join(location_bits) if location_bits else country
 
-    # We do NOT force 5 sources. We allow fewer, but must be "confident".
     url_block = "\n".join(f"- {u}" for u in urls[:10]) if urls else "- (no links found)"
 
     prompt = f"""
@@ -471,9 +466,6 @@ Rules:
 - sources_used should be a de-duplicated list of all relied-upon links (may be empty).
 """.strip()
 
-    # Minimal OpenAI call via HTTPS (no SDK required)
-    # Uses Responses API format compatible with modern OpenAI endpoints.
-    # If your org only allows Chat Completions, we can swap it later.
     headers = {
         "Authorization": f"Bearer {openai_key}",
         "Content-Type": "application/json",
@@ -488,8 +480,6 @@ Rules:
     resp.raise_for_status()
     data = resp.json()
 
-    # Extract text output
-    # responses: output[0].content[0].text is typical
     text_out = ""
     try:
         for o in data.get("output", []):
@@ -503,17 +493,14 @@ Rules:
     if not text_out:
         raise RuntimeError("OpenAI returned an empty response.")
 
-    # Parse JSON
     try:
         parsed = json.loads(text_out)
     except Exception:
-        # Sometimes the model may return leading/trailing text; try to recover JSON object
         m = re.search(r"\{.*\}\s*$", text_out, re.S)
         if not m:
             raise RuntimeError("OpenAI did not return valid JSON.")
         parsed = json.loads(m.group(0))
 
-    # Validate
     min_usd = float(parsed.get("min_usd"))
     max_usd = float(parsed.get("max_usd"))
     if not math.isfinite(min_usd) or not math.isfinite(max_usd):
@@ -560,8 +547,8 @@ def init_state():
         "country": "",
         "state": "N/A",
         "city": "N/A",
-        "rate_type": "salary",   # selection default is OK; not an answer
-        "currency": "USD",       # selection default is OK; not an answer
+        "rate_type": "salary",
+        "currency": "USD",
         "last_result": None,
     }
     for k, v in defaults.items():
@@ -584,7 +571,6 @@ st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate inf
 st.markdown('<div class="jr-card">', unsafe_allow_html=True)
 
 with st.form("job_rate_form", clear_on_submit=False):
-    # Title
     job_title = st.text_input(
         "Job Title *",
         key="job_title",
@@ -592,7 +578,6 @@ with st.form("job_rate_form", clear_on_submit=False):
         value=st.session_state["job_title"] or "",
     )
 
-    # Description (optional)
     job_desc = st.text_area(
         "Job Description (optional)",
         key="job_desc",
@@ -610,7 +595,6 @@ with st.form("job_rate_form", clear_on_submit=False):
         except Exception:
             pass
 
-    # Geo dropdowns (no free text)
     try:
         countries = get_country_list()
     except Exception:
@@ -620,28 +604,23 @@ with st.form("job_rate_form", clear_on_submit=False):
         st.error("Could not load country list. Check your internet connection and try again.")
         countries = ["(unavailable)"]
 
-    # Country
     country = st.selectbox(
         "Country *",
         options=[""] + countries if countries[0] != "(unavailable)" else ["(unavailable)"],
         index=([""] + countries).index(st.session_state["country"]) if (st.session_state["country"] in ([""] + countries)) else 0,
         key="country_select",
     )
-    # keep in session
     st.session_state["country"] = "" if country == "(unavailable)" else country
 
-    # States
     state_options = ["N/A"]
     if st.session_state["country"]:
         state_options = get_states_for_country(st.session_state["country"])
         if not state_options:
             state_options = ["N/A"]
 
-    # If current state not in list, reset to N/A
     if st.session_state["state"] not in state_options:
         st.session_state["state"] = "N/A"
 
-    # Cities depend on country + state
     city_options = ["N/A"]
     if st.session_state["country"]:
         city_options = get_cities(st.session_state["country"], st.session_state["state"])
@@ -671,7 +650,6 @@ with st.form("job_rate_form", clear_on_submit=False):
         st.session_state["city"] = st_city
 
     with c3:
-        # rate type
         rate_type_label = st.radio(
             "Rate Type *",
             options=["Salary", "Hourly"],
@@ -681,7 +659,6 @@ with st.form("job_rate_form", clear_on_submit=False):
         )
         st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
 
-    # Currency
     fx_rates = get_fx_table_usd()
     currency_codes = sorted(fx_rates.keys())
     currency = st.selectbox(
@@ -692,7 +669,6 @@ with st.form("job_rate_form", clear_on_submit=False):
     )
     st.session_state["currency"] = currency
 
-    # Submit
     submitted = st.form_submit_button("Get Rates!")
 
 st.markdown("</div>", unsafe_allow_html=True)
@@ -728,7 +704,6 @@ if submitted:
                 urls = serpapi_search(job_title, country, state, city, rate_type)
                 result = openai_estimate(job_title, job_desc, country, state, city, rate_type, urls)
 
-                # Convert from USD for display
                 min_usd = float(result["min_usd"])
                 max_usd = float(result["max_usd"])
                 pay_type = result.get("pay_type", "ANNUAL")
@@ -739,7 +714,6 @@ if submitted:
                     min_disp = convert_from_usd(min_usd, currency)
                     max_disp = convert_from_usd(max_usd, currency)
 
-                # build sources list objects
                 sources_used = result.get("sources_used") or []
                 min_links = result.get("min_links") or []
                 max_links = result.get("max_links") or []
@@ -758,7 +732,6 @@ if submitted:
                         host, slug = pretty_url_label(u)
                         sources.append({"title": f"{host} — {slug}", "url": u, "range": "Source"})
 
-                # de-dupe URLs
                 seen = set()
                 deduped = []
                 for s in sources:
@@ -791,7 +764,6 @@ if res:
     min_v = res["min"]
     max_v = res["max"]
 
-    # Range Card (rendered as HTML; not printed anywhere else)
     range_html = f"""
     <div class="jr-range">
       <div class="jr-range-top">
@@ -815,13 +787,13 @@ if res:
     """
     st.markdown(range_html, unsafe_allow_html=True)
 
-    # Sources
     sources: List[Dict[str, str]] = res.get("sources") or []
     sources_html = """
     <div class="jr-sources-card">
       <div class="jr-sources-title">Rate Justification Sources</div>
       <div class="jr-sources-sub">The above rate range is based on data from the following industry sources:</div>
     """
+
     if not sources:
         sources_html += '<div style="color:var(--muted);font-size:13px;">No sources were returned confidently for this query.</div>'
     else:
@@ -829,15 +801,17 @@ if res:
             title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
             url = (s.get("url") or "").replace('"', "%22")
             rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+
+            # IMPORTANT FIX: no leading indentation in HTML lines (prevents markdown code-block rendering)
             sources_html += f"""
-              <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                <div class="jr-source-ico">↗</div>
-                <div style="min-width:0;">
-                  <div class="jr-source-main">{title}</div>
-                  <div class="jr-source-sub">Reported Range: {rng}</div>
-                </div>
-              </a>
-            """
+<a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+  <div class="jr-source-ico">↗</div>
+  <div style="min-width:0;">
+    <div class="jr-source-main">{title}</div>
+    <div class="jr-source-sub">Reported Range: {rng}</div>
+  </div>
+</a>
+"""
 
     sources_html += """
       <div class="jr-note"><strong>Note:</strong> These rates are estimates based on aggregated market data. Actual compensation may vary based on experience, skills, company size, and other factors.</div>
