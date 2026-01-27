@@ -32,32 +32,19 @@ APP_CSS = """
     --accent2:#9b4dff;
     --shadow:0 18px 60px rgba(0,0,0,.45);
   }
-
   html, body, [data-testid="stAppViewContainer"]{
     background: radial-gradient(1200px 700px at 20% -10%, rgba(109,94,252,.30), transparent 60%),
                 radial-gradient(900px 600px at 110% 10%, rgba(155,77,255,.22), transparent 55%),
                 linear-gradient(180deg, var(--bg0), var(--bg1));
     color: var(--text);
   }
-
   .block-container { padding-top: 2.1rem; padding-bottom: 2.5rem; max-width: 880px; }
-
   .jr-title{
-    text-align:center;
-    margin-bottom: .35rem;
-    font-size: 44px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: var(--text);
+    text-align:center; margin-bottom: .35rem; font-size: 44px; font-weight: 800;
+    letter-spacing: -0.02em; color: var(--text);
   }
-  .jr-subtitle{
-    text-align:center;
-    margin-bottom: 1.5rem;
-    color: var(--muted);
-    font-size: 15px;
-  }
+  .jr-subtitle{ text-align:center; margin-bottom: 1.5rem; color: var(--muted); font-size: 15px; }
 
-  /* Streamlit card containers */
   div[data-testid="stContainer"]{
     background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
     border: 1px solid var(--border) !important;
@@ -94,12 +81,9 @@ APP_CSS = """
   }
   .stButton button:hover{ filter: brightness(1.05); }
 
-  /* Range block */
   .jr-range{
     background: linear-gradient(90deg, var(--accent), var(--accent2));
-    border-radius: 16px;
-    padding: 18px;
-    color: white;
+    border-radius: 16px; padding: 18px; color: white;
     box-shadow: var(--shadow);
     border: 1px solid rgba(255,255,255,.10);
     margin-top: 16px;
@@ -112,11 +96,8 @@ APP_CSS = """
   .jr-range-unit{ font-size: 12px; color: rgba(255,255,255,.75); margin: 3px 0 0 0; }
   .jr-dash{ font-size: 26px; color: rgba(255,255,255,.70); margin: 0 2px; padding-bottom: 12px; }
 
-  /* Sources rows */
   .jr-source{
-    display:flex;
-    gap: 12px;
-    align-items:flex-start;
+    display:flex; gap: 12px; align-items:flex-start;
     padding: 12px 12px;
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -126,43 +107,30 @@ APP_CSS = """
   }
   .jr-source:hover{ border-color: rgba(109,94,252,.55); background: rgba(109,94,252,.08); }
   .jr-source-ico{
-    width: 22px;
-    height: 22px;
-    border-radius: 8px;
+    width: 22px; height: 22px; border-radius: 8px;
     background: rgba(109,94,252,.22);
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    flex: 0 0 auto;
-    margin-top: 1px;
+    display:flex; align-items:center; justify-content:center;
+    flex: 0 0 auto; margin-top: 1px;
   }
   .jr-source-main{ color: var(--text); font-weight: 700; margin: 0; font-size: 13px; line-height: 1.2; }
   .jr-source-sub{
     color: var(--muted);
     margin: 3px 0 0 0;
     font-size: 12px;
-    display:flex;
-    align-items:center;
-    gap:10px;
-    flex-wrap:wrap;
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
   }
 
   .jr-score-pill{
-    display:inline-flex;
-    align-items:center;
-    gap:8px;
+    display:inline-flex; align-items:center; gap:8px;
     padding: 4px 8px;
     border-radius: 999px;
     border: 1px solid rgba(255,255,255,.14);
     background: rgba(0,0,0,.18);
     color: rgba(232,238,252,.95);
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 11px; font-weight: 700;
   }
   .jr-score-bar{
-    width: 84px;
-    height: 7px;
-    border-radius: 999px;
+    width: 84px; height: 7px; border-radius: 999px;
     background: rgba(255,255,255,.14);
     overflow:hidden;
     display:inline-block;
@@ -174,16 +142,13 @@ APP_CSS = """
   }
 
   .jr-geo-pill{
-    display:inline-flex;
-    align-items:center;
-    gap:6px;
+    display:inline-flex; align-items:center; gap:6px;
     padding: 4px 8px;
     border-radius: 999px;
     border: 1px solid rgba(255,255,255,.14);
     background: rgba(0,0,0,.18);
     color: rgba(232,238,252,.90);
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 11px; font-weight: 700;
   }
 
   .jr-note{
@@ -239,9 +204,7 @@ def require_secret_or_env(name: str) -> str:
         except Exception:
             v = ""
     if not v:
-        raise RuntimeError(
-            f"Missing API key/config: {name}. Set it in Streamlit Secrets or environment variables."
-        )
+        raise RuntimeError(f"Missing API key/config: {name}. Set it in Streamlit Secrets or environment variables.")
     return v
 
 
@@ -370,6 +333,22 @@ def host_of(url: str) -> str:
         return ""
 
 
+def norm_text(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def url_contains_token(url: str, token: str) -> bool:
+    if not token:
+        return True
+    token_norm = norm_text(token)
+    token_dash = token_norm.replace(" ", "-")
+    u = url.lower()
+    return (token_dash in u) or (token_norm in norm_text(u))
+
+
 # ============================================================
 # Parsing helpers
 # ============================================================
@@ -433,7 +412,7 @@ def clean_urls(x: Any) -> List[str]:
 
 
 # ============================================================
-# Description -> lightweight keyword hint
+# Search hint extraction (lightweight)
 # ============================================================
 STOP_WORDS = {
     "the", "and", "or", "to", "of", "a", "an", "in", "for", "with", "on", "at", "by",
@@ -445,7 +424,6 @@ STOP_WORDS = {
 
 def build_search_hint(job_desc: str, experience_level: str) -> str:
     bits: List[str] = []
-
     exp = (experience_level or "").strip()
     if exp:
         bits.append(exp)
@@ -456,8 +434,8 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
 
     cleaned = re.sub(r"[^\w\s\-/&+]", " ", desc)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
     tokens = re.split(r"\s+", cleaned)[:160]
+
     keep: List[str] = []
     for t in tokens:
         tt = t.strip()
@@ -469,13 +447,14 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
         if len(tt) < 3 or len(tt) > 22:
             continue
 
-        # keep "skill-ish" tokens
+        # keep skill-ish tokens
         if any(ch in tt for ch in ["/", "+", "-", "&"]) or (re.search(r"[A-Z]", tt) is not None):
             keep.append(tt)
         else:
             if low in {
                 "figma", "adobe", "after", "effects", "photoshop", "illustrator", "premiere",
-                "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design"
+                "ui", "ux", "motion", "graphics", "video", "editing", "designer", "design",
+                "merchandising", "retail", "planograms", "store", "visual"
             }:
                 keep.append(tt)
 
@@ -490,9 +469,10 @@ def build_search_hint(job_desc: str, experience_level: str) -> str:
 
 
 # ============================================================
-# Source reliability + geo checks
+# Reliability + blocklists
 # ============================================================
 RELIABLE_HOST_HINTS = [
+    "salaryexpert.com",
     "levels.fyi",
     "glassdoor.com",
     "indeed.com",
@@ -532,70 +512,70 @@ def reliability_boost(url: str) -> int:
     h = host_of(url)
     for r in RELIABLE_HOST_HINTS:
         if r in h:
-            return 25
+            return 28
     return 0
 
 
-def norm_loc(s: str) -> str:
-    s = (s or "").strip().lower()
-    s = re.sub(r"[^a-z0-9\s-]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+def geo_priority(tag: str) -> int:
+    return {"Exact": 3, "Country-level": 2, "Nearby/Unclear": 1}.get(tag, 0)
 
 
-def url_contains_location(url: str, token: str) -> bool:
-    if not token:
-        return True
-    token_norm = norm_loc(token)
-    token_dash = token_norm.replace(" ", "-")
-    u = url.lower()
-    return (token_dash in u) or (token_norm in norm_loc(u))
-
-
-@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
-def page_text_contains(url: str, needle: str) -> bool:
-    try:
-        if not needle:
-            return True
-        r = http_get(url, timeout=18)
-        if not r.ok:
-            return False
-        txt = r.text or ""
-        return norm_loc(needle) in norm_loc(txt)
-    except Exception:
-        return False
-
-
-def geo_tag_for_url(url: str, country: str, state: str, city: str) -> str:
+# ============================================================
+# SerpAPI helpers (use snippet/title for geo checks)
+# ============================================================
+def serp_country_aliases(country: str) -> List[str]:
     c = (country or "").strip()
-    s = (state or "").strip()
-    ci = (city or "").strip()
+    if not c:
+        return []
 
-    # Require country always (best-effort)
-    country_ok = url_contains_location(url, c) or page_text_contains(url, c)
+    aliases = {c}
+
+    cl = c.lower()
+    if cl in {"united states", "usa", "us", "u.s.", "u.s.a."}:
+        aliases |= {"United States", "USA", "US", "U.S."}
+    if cl in {"united kingdom", "uk", "u.k."}:
+        aliases |= {"United Kingdom", "UK", "U.K.", "Britain", "Great Britain"}
+    if cl in {"brazil"}:
+        aliases |= {"Brazil", "Brasil"}
+
+    # Keep it simple; you can add more later.
+    return sorted({a for a in aliases if a})
+
+
+def text_contains_any(hay: str, needles: List[str]) -> bool:
+    h = norm_text(hay)
+    for n in needles:
+        if not n:
+            continue
+        if norm_text(n) in h:
+            return True
+    return False
+
+
+def geo_tag_from_serp(url: str, title: str, snippet: str, country: str, state: str, city: str) -> str:
+    # We want country ALWAYS if possible, but don't hard-fail on missing literal country string
+    # (because pages often omit it). If it doesn't show up, label Nearby/Unclear.
+
+    country_alias = serp_country_aliases(country)
+    blob = " ".join([title or "", snippet or "", url or ""])
+
+    country_ok = text_contains_any(blob, country_alias) or url_contains_token(url, country)
     if not country_ok:
-        return "Nearby"
+        return "Nearby/Unclear"
 
-    if not s and not ci:
+    if not state and not city:
         return "Country-level"
 
-    if ci:
-        city_ok = url_contains_location(url, ci) or page_text_contains(url, ci)
-        if not city_ok:
-            return "Nearby"
+    if city:
+        if text_contains_any(blob, [city]) or url_contains_token(url, city):
+            # city hit is strong
+            return "Exact"
 
-    if s:
-        state_ok = url_contains_location(url, s) or page_text_contains(url, s)
-        if not state_ok:
-            if ci and (url_contains_location(url, ci) or page_text_contains(url, ci)):
-                return "Exact"
-            return "Nearby"
+    if state:
+        if text_contains_any(blob, [state]) or url_contains_token(url, state):
+            return "Exact"
 
-    return "Exact"
-
-
-def geo_priority(tag: str) -> int:
-    return {"Exact": 3, "Country-level": 2, "Nearby": 1}.get(tag, 0)
+    return "Country-level"
 
 
 # ============================================================
@@ -617,65 +597,91 @@ def serpapi_search(
     rate_type: str,
     job_desc: str = "",
     experience_level: str = "",
-) -> List[str]:
+) -> List[Dict[str, Any]]:
+    """
+    Returns candidate results as dicts:
+      {url, title, snippet, host, geo_tag, rel_boost}
+    """
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
-
     pay_type = rate_type_to_pay_type(rate_type)
     hint = build_search_hint(job_desc, experience_level)
 
-    parts: List[str] = []
-    parts.append(job_title.strip())
-    if hint:
-        parts.append(hint)
-
-    # Always force country into the query
-    parts.append(f'salary range "{country}"')
-    parts.append("hourly rate" if pay_type == "HOURLY" else "annual salary")
-
-    # Add optional state/city as quoted tokens
+    # Query A: your manual style
+    q_a_parts = [job_title.strip()]
+    if experience_level.strip():
+        q_a_parts.append(experience_level.strip())
+    q_a_parts.append(country.strip())
     if state:
-        parts.append(f'"{state}"')
+        q_a_parts.append(state.strip())
     if city:
-        parts.append(f'"{city}"')
+        q_a_parts.append(city.strip())
+    q_a_parts.append("salary")
+    q_a = " ".join([p for p in q_a_parts if p]).strip()
 
-    query = " ".join([p for p in parts if p]).strip()
+    # Query B: current style + hint
+    q_b_parts = [job_title.strip()]
+    if hint:
+        q_b_parts.append(hint)
+    q_b_parts.append(f'salary range "{country}"')
+    q_b_parts.append("hourly rate" if pay_type == "HOURLY" else "annual salary")
+    if state:
+        q_b_parts.append(f'"{state}"')
+    if city:
+        q_b_parts.append(f'"{city}"')
+    q_b = " ".join([p for p in q_b_parts if p]).strip()
 
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": serp_key,
-        "num": 30,
-        "tbs": "qdr:m3",
-    }
+    # Query C: SalaryExpert must-try (but we don’t force it to exist)
+    q_c = f'site:salaryexpert.com "{job_title}" "{country}" salary'
 
-    r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
-    r.raise_for_status()
-    data = r.json()
+    queries = [q_a, q_b, q_c]
 
-    urls: List[str] = []
-    for item in (data.get("organic_results") or []):
-        link = item.get("link")
-        if isinstance(link, str) and link.startswith(("http://", "https://")):
-            urls.append(link)
+    all_items: List[Dict[str, Any]] = []
+    for q in queries:
+        params = {"engine": "google", "q": q, "api_key": serp_key, "num": 20, "tbs": "qdr:m3"}
+        r = http_get("https://serpapi.com/search.json", params=params, timeout=35)
+        r.raise_for_status()
+        data = r.json()
 
-    urls = [u for u in urls if not is_blocked_source(u)]
+        for item in (data.get("organic_results") or []):
+            link = item.get("link")
+            if not (isinstance(link, str) and link.startswith(("http://", "https://"))):
+                continue
+            if is_blocked_source(link):
+                continue
 
-    scored: List[Tuple[int, int, str]] = []
-    for u in urls:
-        tag = geo_tag_for_url(u, country, state, city)
-        scored.append((geo_priority(tag), reliability_boost(u), u))
+            title = item.get("title") if isinstance(item.get("title"), str) else ""
+            snippet = item.get("snippet") if isinstance(item.get("snippet"), str) else ""
+            h = host_of(link)
+            geo = geo_tag_from_serp(link, title, snippet, country, state, city)
+            rel = reliability_boost(link)
 
-    scored.sort(reverse=True)
+            all_items.append(
+                {
+                    "url": link.strip(),
+                    "title": title.strip(),
+                    "snippet": snippet.strip(),
+                    "host": h,
+                    "geo_tag": geo,
+                    "rel_boost": rel,
+                }
+            )
 
-    out: List[str] = []
-    seen = set()
-    for _, __, u in scored:
-        if u in seen:
-            continue
-        seen.add(u)
-        out.append(u)
+    # Deduplicate by URL, keep the best scoring version
+    best: Dict[str, Dict[str, Any]] = {}
+    for it in all_items:
+        u = it["url"]
+        score = geo_priority(it["geo_tag"]) * 100 + it["rel_boost"]
+        if u not in best:
+            best[u] = {**it, "_score": score}
+        else:
+            if score > int(best[u].get("_score", 0)):
+                best[u] = {**it, "_score": score}
 
-    return out[:22]
+    dedup = list(best.values())
+    dedup.sort(key=lambda x: int(x.get("_score", 0)), reverse=True)
+
+    # Return top candidates (more is okay; OpenAI will pick)
+    return dedup[:24]
 
 
 def openai_estimate(
@@ -686,7 +692,7 @@ def openai_estimate(
     state: str,
     city: str,
     rate_type: str,
-    urls: List[str],
+    candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     openai_key = require_secret_or_env("OPENAI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
@@ -697,7 +703,13 @@ def openai_estimate(
     exp = (experience_level or "").strip()
     exp_line = f'- Experience level (optional): "{exp}"' if exp else '- Experience level (optional): ""'
 
-    url_block = "\n".join(f"- {u}" for u in urls[:12]) if urls else "- (no links found)"
+    # Give the model the URL + context so it can select correctly
+    lines = []
+    for c in candidates[:14]:
+        lines.append(
+            f'- {c["url"]}\n  title: {c.get("title","")}\n  snippet: {c.get("snippet","")}\n  geo: {c.get("geo_tag","")}'
+        )
+    url_block = "\n".join(lines) if lines else "- (no links found)"
 
     prompt = f"""
 You are estimating compensation ranges from recent job postings/listings and reputable salary pages.
@@ -731,14 +743,14 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 }}
 
 Rules:
-- min_usd must be <= max_usd and both realistic for the role/location/experience.
-- Prefer reputable sources (Levels.fyi, Glassdoor, Indeed, Salary.com, Payscale, BuiltIn, ZipRecruiter, LinkedIn).
+- min_usd <= max_usd and both realistic for the role/location/experience.
+- Strongly prefer sources tagged geo: Exact or Country-level. Only use Nearby/Unclear if necessary.
+- Prefer reputable sources (SalaryExpert, Levels.fyi, Glassdoor, Indeed, Salary.com, Payscale, BuiltIn, ZipRecruiter, LinkedIn).
 - Try to return 5–8 strong sources if (and only if) there are 5–8 clearly relevant, reputable sources available.
-- Do NOT force a minimum number of sources. If only 2–4 good sources exist, return only those.
+- Do NOT force a minimum number of sources.
 - Only include a source if it materially supports the range for this role + location.
 - Do NOT invent new URLs. ONLY choose from the provided candidate links.
 - strength is how strong the page is as a compensation source (0-100).
-- min_links and max_links: 0–5 each when it makes sense (do not pad with weak links).
 - sources_used should be a de-duplicated list of relied-upon links.
 """.strip()
 
@@ -775,27 +787,24 @@ Rules:
     max_usd = parse_number_like(parsed.get("max_usd"))
     if min_usd is None or max_usd is None:
         raise RuntimeError("OpenAI returned invalid min/max values.")
-
     min_usd, max_usd = clamp_min_max(float(min_usd), float(max_usd), pay_type_out)
 
-    sources_used = clean_urls(parsed.get("sources_used"))
-    min_links = clean_urls(parsed.get("min_links"))
-    max_links = clean_urls(parsed.get("max_links"))
+    urls = [c["url"] for c in candidates]
+    cand_set = set(urls)
 
-    cand = set(urls)
-
-    def only_candidates(xs: List[str]) -> List[str]:
-        out = []
+    def only_candidates(xs: Any) -> List[str]:
+        xs2 = clean_urls(xs)
+        out: List[str] = []
         seen = set()
-        for u in xs:
-            if u in cand and u not in seen and not is_blocked_source(u):
+        for u in xs2:
+            if u in cand_set and u not in seen and not is_blocked_source(u):
                 seen.add(u)
                 out.append(u)
         return out
 
-    sources_used = only_candidates(sources_used)
-    min_links = only_candidates(min_links)
-    max_links = only_candidates(max_links)
+    sources_used = only_candidates(parsed.get("sources_used"))
+    min_links = only_candidates(parsed.get("min_links"))
+    max_links = only_candidates(parsed.get("max_links"))
 
     scored_sources: List[Dict[str, Any]] = []
     raw_sources = parsed.get("sources")
@@ -807,7 +816,7 @@ Rules:
             if not (isinstance(url, str) and url.startswith(("http://", "https://"))):
                 continue
             url = url.strip()
-            if url not in cand or is_blocked_source(url):
+            if url not in cand_set or is_blocked_source(url):
                 continue
 
             range_tag = str(item.get("range_tag") or "General").strip()
@@ -825,13 +834,13 @@ Rules:
 
             scored_sources.append({"url": url, "range_tag": range_tag, "strength": strength_int})
 
-    best: Dict[str, Dict[str, Any]] = {}
+    best_src: Dict[str, Dict[str, Any]] = {}
     for s in scored_sources:
         u = s["url"]
-        if u not in best or int(s["strength"]) > int(best[u]["strength"]):
-            best[u] = s
+        if u not in best_src or int(s["strength"]) > int(best_src[u]["strength"]):
+            best_src[u] = s
 
-    dedup_scored = list(best.values())
+    dedup_scored = list(best_src.values())
     dedup_scored.sort(key=lambda x: int(x.get("strength", 0)), reverse=True)
 
     return {
@@ -846,7 +855,7 @@ Rules:
 
 
 # ============================================================
-# State init
+# UI state init
 # ============================================================
 def init_state():
     defaults = {
@@ -869,9 +878,6 @@ def init_state():
 init_state()
 
 
-# ============================================================
-# Callbacks
-# ============================================================
 def on_country_change():
     st.session_state["state"] = ""
     st.session_state["city"] = ""
@@ -895,12 +901,8 @@ st.markdown(
 # Form card
 # ============================================================
 with st.container(border=True):
-    st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
-    st.text_input(
-        "Experience Level (optional)",
-        key="experience_level",
-        placeholder="e.g., Junior, Mid-level, Senior, 5+ years",
-    )
+    st.text_input("Job Title *", key="job_title", placeholder="e.g., Visual Merchandiser")
+    st.text_input("Experience Level (optional)", key="experience_level", placeholder="e.g., Mid-level, 3–5 years")
     st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description here...", height=130)
 
     uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
@@ -1022,7 +1024,7 @@ if submitted:
             rate_type = st.session_state["rate_type"]
             currency = st.session_state["currency"]
 
-            urls = serpapi_search(
+            candidates = serpapi_search(
                 job_title,
                 country,
                 state,
@@ -1031,9 +1033,15 @@ if submitted:
                 job_desc=job_desc,
                 experience_level=experience_level,
             )
-
             result = openai_estimate(
-                job_title, job_desc, experience_level, country, state, city, rate_type, urls
+                job_title,
+                job_desc,
+                experience_level,
+                country,
+                state,
+                city,
+                rate_type,
+                candidates,
             )
 
             min_usd = float(result["min_usd"])
@@ -1046,6 +1054,8 @@ if submitted:
                 min_disp = convert_from_usd(min_usd, currency)
                 max_disp = convert_from_usd(max_usd, currency)
 
+            # Build maps from candidate metadata (geo from SERP)
+            cand_map: Dict[str, Dict[str, Any]] = {c["url"]: c for c in candidates}
             scored = result.get("scored_sources") or []
             score_map: Dict[str, int] = {}
             tag_map: Dict[str, str] = {}
@@ -1066,7 +1076,7 @@ if submitted:
                 title = f"{host} — {slug}" if slug else host
                 strength = int(score_map.get(u, 55))
                 strength = int(max(0, min(100, strength + reliability_boost(u))))
-                geo = geo_tag_for_url(u, country, state, city)
+                geo = str(cand_map.get(u, {}).get("geo_tag", "Nearby/Unclear"))
                 sources.append({"title": title, "url": u, "range": rng, "strength": strength, "geo": geo})
 
             for u in min_links:
@@ -1096,6 +1106,7 @@ if submitted:
                     if len(sources) >= 10:
                         break
 
+            # dedupe
             seen = set()
             deduped: List[Dict[str, Any]] = []
             for s in sources:
@@ -1105,6 +1116,7 @@ if submitted:
                 seen.add(u)
                 deduped.append(s)
 
+            # Sort: geo match first, then strength
             deduped.sort(
                 key=lambda x: (geo_priority(str(x.get("geo", ""))), int(x.get("strength", 0))),
                 reverse=True,
@@ -1179,7 +1191,7 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("Sources are prioritized by location match (Exact → Country-level → Nearby) and reliability.")
+        st.caption("Sources are prioritized by geo match (Exact → Country-level → Nearby/Unclear) and reliability.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
@@ -1188,8 +1200,8 @@ if res:
                 title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
                 url = (s.get("url") or "").replace('"', "%22")
                 rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                geo = (s.get("geo") or "Nearby").strip()
-                geo_label = "Exact match" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby")
+                geo = (s.get("geo") or "Nearby/Unclear").strip()
+                geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
 
                 try:
                     strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
@@ -1220,8 +1232,8 @@ if res:
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> If a location-specific salary page isn’t available for the selected city/state,
-              the app may show <em>Country-level</em> or <em>Nearby</em> sources (clearly labeled) rather than forcing incorrect matches.
+              <strong>Note:</strong> SalaryExpert is treated as a "must-try" search target, but the app will not fail
+              if no SalaryExpert result exists for a country/job.
             </div>
             """,
             unsafe_allow_html=True,
