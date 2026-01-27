@@ -84,7 +84,7 @@ APP_CSS = """
     color: var(--text) !important;
   }
 
-  .stButton button, .stForm button{
+  .stButton button{
     width: 100%;
     border: 0;
     border-radius: 12px;
@@ -94,7 +94,7 @@ APP_CSS = """
     background: linear-gradient(90deg, var(--accent), var(--accent2));
     box-shadow: 0 12px 35px rgba(109,94,252,.35);
   }
-  .stButton button:hover, .stForm button:hover{
+  .stButton button:hover{
     filter: brightness(1.05);
   }
 
@@ -497,6 +497,18 @@ init_state()
 
 
 # ============================================================
+# Callbacks for dependent dropdowns
+# ============================================================
+def on_country_change():
+    st.session_state["state"] = "N/A"
+    st.session_state["city"] = "N/A"
+
+
+def on_state_change():
+    st.session_state["city"] = "N/A"
+
+
+# ============================================================
 # Header
 # ============================================================
 st.markdown('<div class="jr-title">Job Rate Finder</div>', unsafe_allow_html=True)
@@ -504,117 +516,123 @@ st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate inf
 
 
 # ============================================================
-# Form Card  (EDIT 1: exactly ONE wrapper open + ONE close)
+# Form Card (no st.form so geo dropdowns refresh live)
 # ============================================================
 st.markdown('<div class="jr-card">', unsafe_allow_html=True)
 
-with st.form("job_rate_form", clear_on_submit=False):
-    job_title = st.text_input(
-        "Job Title *",
-        key="job_title",
-        placeholder="e.g., Senior Software Engineer",
-        value=st.session_state["job_title"] or "",
-    )
+# Job basics
+st.text_input(
+    "Job Title *",
+    key="job_title",
+    placeholder="e.g., Senior Software Engineer",
+)
 
-    job_desc = st.text_area(
-        "Job Description (optional)",
-        key="job_desc",
-        placeholder="Paste job description here...",
-        height=130,
-        value=st.session_state["job_desc"] or "",
-    )
+st.text_area(
+    "Job Description (optional)",
+    key="job_desc",
+    placeholder="Paste job description here...",
+    height=130,
+)
 
-    uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
-    if uploaded is not None:
-        try:
-            text = uploaded.read().decode("utf-8", errors="ignore")
-            st.session_state["job_desc"] = text
-            job_desc = text
-        except Exception:
-            pass
-
-    # Country (full width)
+uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt"], accept_multiple_files=False)
+if uploaded is not None:
     try:
-        countries = get_country_list()
+        text = uploaded.read().decode("utf-8", errors="ignore")
+        st.session_state["job_desc"] = text
     except Exception:
-        countries = []
+        pass
 
-    if not countries:
-        st.error("Could not load country list. Check your internet connection and try again.")
-        countries = ["(unavailable)"]
+# Country list
+try:
+    countries = get_country_list()
+except Exception:
+    countries = []
 
-    country = st.selectbox(
-        "Country *",
-        options=[""] + countries if countries[0] != "(unavailable)" else ["(unavailable)"],
-        index=([""] + countries).index(st.session_state["country"]) if (st.session_state["country"] in ([""] + countries)) else 0,
-        key="country_select",
+if not countries:
+    st.error("Could not load country list. Check your internet connection and try again.")
+    countries = ["(unavailable)"]
+
+country_options = [""] + countries if countries and countries[0] != "(unavailable)" else ["(unavailable)"]
+
+st.selectbox(
+    "Country *",
+    options=country_options,
+    index=country_options.index(st.session_state["country"]) if st.session_state["country"] in country_options else 0,
+    key="country",
+    on_change=on_country_change,
+)
+
+# Build state options based on selected country
+state_options = ["N/A"]
+if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
+    state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
+    if not state_options:
+        state_options = ["N/A"]
+
+# Ensure state is valid
+if st.session_state["state"] not in state_options:
+    st.session_state["state"] = "N/A"
+
+# Now compute city options based on current country+state
+city_options = ["N/A"]
+if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
+    city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
+    if not city_options:
+        city_options = ["N/A"]
+
+if st.session_state["city"] not in city_options:
+    st.session_state["city"] = "N/A"
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.selectbox(
+        "State/Province (optional)",
+        options=state_options,
+        index=state_options.index(st.session_state["state"]) if st.session_state["state"] in state_options else 0,
+        key="state",
+        on_change=on_state_change,
     )
-    st.session_state["country"] = "" if country == "(unavailable)" else country
-
-    # (EDIT 2) State first -> update session -> THEN compute city list from the updated state
-    state_options = ["N/A"]
-    if st.session_state["country"]:
-        state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
-        if not state_options:
-            state_options = ["N/A"]
-
-    # If current state not in list, reset
-    if st.session_state["state"] not in state_options:
-        st.session_state["state"] = "N/A"
-
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        st_state = st.selectbox(
-            "State/Province (optional)",
-            options=state_options,
-            index=state_options.index(st.session_state["state"]) if st.session_state["state"] in state_options else 0,
-            key="state_select",
-        )
-        st.session_state["state"] = st_state
-
-    # NOW compute city options from the *current* state (fixes the lag)
+with c2:
+    # Recompute city options AFTER state selection (this rerun happens immediately now)
     city_options = ["N/A"]
-    if st.session_state["country"]:
+    if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
         city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
         if not city_options:
             city_options = ["N/A"]
-
     if st.session_state["city"] not in city_options:
         st.session_state["city"] = "N/A"
 
-    with c2:
-        st_city = st.selectbox(
-            "City (optional)",
-            options=city_options,
-            index=city_options.index(st.session_state["city"]) if st.session_state["city"] in city_options else 0,
-            key="city_select",
-        )
-        st.session_state["city"] = st_city
-
-    with c3:
-        rate_type_label = st.radio(
-            "Rate Type *",
-            options=["Salary", "Hourly"],
-            index=0 if st.session_state["rate_type"] == "salary" else 1,
-            horizontal=True,
-            key="rate_type_radio",
-        )
-        st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
-
-    fx_rates = get_fx_table_usd()
-    currency_codes = sorted(fx_rates.keys())
-    currency = st.selectbox(
-        "Currency *",
-        options=currency_codes,
-        index=currency_codes.index(st.session_state["currency"]) if st.session_state["currency"] in currency_codes else currency_codes.index("USD"),
-        key="currency_select",
+    st.selectbox(
+        "City (optional)",
+        options=city_options,
+        index=city_options.index(st.session_state["city"]) if st.session_state["city"] in city_options else 0,
+        key="city",
     )
-    st.session_state["currency"] = currency
 
-    submitted = st.form_submit_button("Get Rates!")
+with c3:
+    rate_type_label = st.radio(
+        "Rate Type *",
+        options=["Salary", "Hourly"],
+        index=0 if st.session_state["rate_type"] == "salary" else 1,
+        horizontal=True,
+        key="rate_type_radio",
+    )
+    st.session_state["rate_type"] = "hourly" if rate_type_label == "Hourly" else "salary"
 
-st.markdown("</div>", unsafe_allow_html=True)  # EDIT 1 close
+# Currency
+fx_rates = get_fx_table_usd()
+currency_codes = sorted(fx_rates.keys())
+st.selectbox(
+    "Currency *",
+    options=currency_codes,
+    index=currency_codes.index(st.session_state["currency"]) if st.session_state["currency"] in currency_codes else currency_codes.index("USD"),
+    key="currency",
+)
+
+# Submit button (normal button = live reruns everywhere else)
+submitted = st.button("Get Rates!")
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -625,6 +643,8 @@ def is_valid() -> Tuple[bool, str]:
         return False, "Job Title is required."
     if not (st.session_state["country"] or "").strip():
         return False, "Country is required."
+    if st.session_state["country"] == "(unavailable)":
+        return False, "Country list is unavailable right now. Please try again."
     if not (st.session_state["currency"] or "").strip():
         return False, "Currency is required."
     return True, ""
