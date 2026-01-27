@@ -253,12 +253,16 @@ def get_country_list() -> List[str]:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_states_for_country(country: str) -> List[str]:
+    """
+    Returns list of states/provinces.
+    Returns [] if none or unavailable. (UI adds a blank option on top.)
+    """
     try:
         if not country:
-            return ["N/A"]
+            return []
         r = http_post(f"{COUNTRIESNOW_BASE}/countries/states", json_body={"country": country}, timeout=25)
         if not r.ok:
-            return ["N/A"]
+            return []
         data = r.json()
         states: List[str] = []
         for s in (data.get("data") or {}).get("states") or []:
@@ -266,26 +270,32 @@ def get_states_for_country(country: str) -> List[str]:
             if isinstance(name, str) and name.strip():
                 states.append(name.strip())
         states = sorted(set(states), key=lambda x: x.lower())
-        return states if states else ["N/A"]
+        return states
     except Exception:
-        return ["N/A"]
+        return []
 
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def get_cities(country: str, state: str) -> List[str]:
+    """
+    City list.
+    - If state is blank/unknown: fetch country-level cities.
+    - Else: fetch state-level cities.
+    Returns [] if unavailable. (UI adds a blank option on top.)
+    """
     try:
         if not country:
-            return ["N/A"]
+            return []
 
-        if not state or state == "N/A":
+        # If state is blank/unknown, search the whole country
+        if not state:
             r = http_post(f"{COUNTRIESNOW_BASE}/countries/cities", json_body={"country": country}, timeout=25)
             if not r.ok:
-                return ["N/A"]
+                return []
             data = r.json()
             cities = data.get("data") or []
             cities = [c.strip() for c in cities if isinstance(c, str) and c.strip()]
-            cities = sorted(set(cities), key=lambda x: x.lower())
-            return cities if cities else ["N/A"]
+            return sorted(set(cities), key=lambda x: x.lower())
 
         r = http_post(
             f"{COUNTRIESNOW_BASE}/countries/state/cities",
@@ -293,14 +303,13 @@ def get_cities(country: str, state: str) -> List[str]:
             timeout=25,
         )
         if not r.ok:
-            return ["N/A"]
+            return []
         data = r.json()
         cities = data.get("data") or []
         cities = [c.strip() for c in cities if isinstance(c, str) and c.strip()]
-        cities = sorted(set(cities), key=lambda x: x.lower())
-        return cities if cities else ["N/A"]
+        return sorted(set(cities), key=lambda x: x.lower())
     except Exception:
-        return ["N/A"]
+        return []
 
 
 # ============================================================
@@ -427,7 +436,7 @@ def pay_type_to_rate_type(pay_type: str) -> str:
 def serpapi_search(job_title: str, country: str, state: str, city: str, rate_type: str) -> List[str]:
     serp_key = require_secret_or_env("SERPAPI_API_KEY")
 
-    location_bits = [b for b in [city, state, country] if b and b != "N/A"]
+    location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
     pay_type = rate_type_to_pay_type(rate_type)
@@ -467,7 +476,7 @@ def openai_estimate(
     openai_key = require_secret_or_env("OPENAI_API_KEY")
     pay_type = rate_type_to_pay_type(rate_type)
 
-    location_bits = [b for b in [city, state, country] if b and b != "N/A"]
+    location_bits = [b for b in [city, state, country] if b]
     loc = ", ".join(location_bits) if location_bits else country
 
     url_block = "\n".join(f"- {u}" for u in urls[:12]) if urls else "- (no links found)"
@@ -507,10 +516,12 @@ Output STRICT JSON only (no markdown, no commentary) in this exact shape:
 
 Rules:
 - min_usd must be <= max_usd and both realistic for the role/location.
-- Prefer returning ~5 strong sources when available. If you can only confidently return 2-3, that's fine.
+- Try to return 5–8 strong sources if (and only if) there are 5–8 clearly relevant, reputable sources available in the candidate links.
+- Do NOT force a minimum number of sources. If only 2–4 good sources exist, return only those.
+- Only include a source if it materially supports the range for this role + location.
 - Avoid low-quality or irrelevant sources.
 - strength is how strong the page is as a compensation source (0-100).
-- min_links and max_links: 0-4 each when possible.
+- min_links and max_links: 0–5 each when it makes sense (do not pad with weak links).
 - sources_used should be a de-duplicated list of relied-upon links.
 """.strip()
 
@@ -572,7 +583,7 @@ Rules:
             strength_num = (
                 float(strength_raw)
                 if isinstance(strength_raw, (int, float))
-                else (parse_number_like(str(strength_raw)) or 50.0)
+                else (parse_number_like(str(strength_raw)) or 55.0)
             )
             strength_int = int(max(0, min(100, round(strength_num))))
             scored_sources.append({"url": url.strip(), "range_tag": range_tag, "strength": strength_int})
@@ -606,8 +617,8 @@ def init_state():
         "job_title": "",
         "job_desc": "",
         "country": "",
-        "state": "N/A",
-        "city": "N/A",
+        "state": "",   # blank = off
+        "city": "",    # blank = off
         "rate_type": "salary",
         "currency": "USD",
         "last_result": None,
@@ -625,12 +636,12 @@ init_state()
 # Callbacks
 # ============================================================
 def on_country_change():
-    st.session_state["state"] = "N/A"
-    st.session_state["city"] = "N/A"
+    st.session_state["state"] = ""
+    st.session_state["city"] = ""
 
 
 def on_state_change():
-    st.session_state["city"] = "N/A"
+    st.session_state["city"] = ""
 
 
 # ============================================================
@@ -644,7 +655,7 @@ st.markdown(
 
 
 # ============================================================
-# Form card (everything truly inside the box)
+# Form card (everything inside the box)
 # ============================================================
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Senior Software Engineer")
@@ -677,11 +688,13 @@ with st.container(border=True):
         on_change=on_country_change,
     )
 
-    state_options = ["N/A"]
+    # Build state list (blank option at top)
+    states = []
     if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
-        state_options = get_states_for_country(st.session_state["country"]) or ["N/A"]
+        states = get_states_for_country(st.session_state["country"]) or []
+    state_options = [""] + states  # blank = off
     if st.session_state["state"] not in state_options:
-        st.session_state["state"] = "N/A"
+        st.session_state["state"] = ""
 
     c1, c2, c3 = st.columns(3)
 
@@ -692,20 +705,24 @@ with st.container(border=True):
             index=state_options.index(st.session_state["state"]) if st.session_state["state"] in state_options else 0,
             key="state",
             on_change=on_state_change,
+            format_func=lambda x: "— Leave blank —" if x == "" else x,
         )
 
-    with c2:
-        city_options = ["N/A"]
-        if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
-            city_options = get_cities(st.session_state["country"], st.session_state["state"]) or ["N/A"]
-        if st.session_state["city"] not in city_options:
-            st.session_state["city"] = "N/A"
+    # Build city list (blank option at top)
+    cities = []
+    if st.session_state["country"] and st.session_state["country"] != "(unavailable)":
+        cities = get_cities(st.session_state["country"], st.session_state["state"]) or []
+    city_options = [""] + cities  # blank = off
+    if st.session_state["city"] not in city_options:
+        st.session_state["city"] = ""
 
+    with c2:
         st.selectbox(
             "City (optional)",
             options=city_options,
             index=city_options.index(st.session_state["city"]) if st.session_state["city"] in city_options else 0,
             key="city",
+            format_func=lambda x: "— Leave blank —" if x == "" else x,
         )
 
     with c3:
@@ -757,8 +774,8 @@ if submitted:
             job_title = st.session_state["job_title"].strip()
             job_desc = (st.session_state["job_desc"] or "").strip()
             country = st.session_state["country"].strip()
-            state = (st.session_state["state"] or "N/A").strip()
-            city = (st.session_state["city"] or "N/A").strip()
+            state = (st.session_state["state"] or "").strip()  # blank allowed
+            city = (st.session_state["city"] or "").strip()    # blank allowed
             rate_type = st.session_state["rate_type"]
             currency = st.session_state["currency"]
 
@@ -801,7 +818,7 @@ if submitted:
             for u in max_links:
                 add_source(u, "Max (Annual)" if pay_type == "ANNUAL" else "Max (Hourly)")
 
-            # Prefer ~5 sources: fill from scored, then sources_used
+            # Prefer 5+ only if we truly have them: fill from scored, then sources_used
             if len(sources) < 5:
                 for item in scored:
                     u = item.get("url")
@@ -814,13 +831,13 @@ if submitted:
                         else:
                             rng = "Source"
                         add_source(u, rng)
-                        if len(sources) >= 6:
+                        if len(sources) >= 10:
                             break
 
             if len(sources) < 3:
                 for u in sources_used:
                     add_source(u, "Source")
-                    if len(sources) >= 5:
+                    if len(sources) >= 8:
                         break
 
             # dedupe
@@ -838,7 +855,8 @@ if submitted:
                 "max": int(round(max_disp)),
                 "currency": currency.upper(),
                 "rateType": pay_type_to_rate_type(pay_type),
-                "sources": deduped[:8],
+                # increased source list cap (previous update)
+                "sources": deduped[:12],
             }
 
         except requests.HTTPError as e:
@@ -867,9 +885,6 @@ if submitted:
 
 # ============================================================
 # Render results
-# FIX for your “raw HTML showing as code”:
-# We render each source row with st.markdown(..., unsafe_allow_html=True)
-# inside a real Streamlit container (not one giant HTML blob).
 # ============================================================
 res = st.session_state.get("last_result")
 if res:
