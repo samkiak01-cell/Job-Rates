@@ -1468,129 +1468,49 @@ if res:
 
     with st.container(border=True):
         st.markdown("### Rate Justification Sources")
-        st.caption("Sources linked to the minimum and maximum values in the estimated range.")
+        st.caption("Sources prioritized by geo match and reliability. Range based on actual data from these sources.")
 
         if not sources:
             st.caption("No sources were returned confidently for this query.")
         else:
-            # Group sources by type
-            min_sources = [s for s in sources if "Min" in s.get("range", "")]
-            max_sources = [s for s in sources if "Max" in s.get("range", "")]
-            general_sources = [s for s in sources if s not in min_sources and s not in max_sources]
-            
-            # Show minimum supporting sources
-            if min_sources:
-                st.markdown(f"#### 💰 Minimum ({cur} {min_v:,} {unit})")
-                for s in min_sources:
-                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    url = (s.get("url") or "").replace('"', "%22")
-                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    geo = (s.get("geo") or "Nearby/Unclear").strip()
-                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
+            for s in sources:
+                title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                url = (s.get("url") or "").replace('"', "%22")
+                rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
+                geo = (s.get("geo") or "Nearby/Unclear").strip()
+                geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
 
-                    try:
-                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
-                    except Exception:
-                        strength_i = 55
+                try:
+                    strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
+                except Exception:
+                    strength_i = 55
 
-                    row_html = f"""
-                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                      <div class="jr-source-ico">↗</div>
-                      <div style="min-width:0; width:100%;">
-                        <div class="jr-source-main">{title}</div>
-                        <div class="jr-source-sub">
-                          <span>Supports: {rng}</span>
-                          <span class="jr-geo-pill">{geo_label}</span>
-                          <span class="jr-score-pill">
-                            <span>Strength</span>
-                            <span>{strength_i}/100</span>
-                            <span class="jr-score-bar">
-                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
-                            </span>
-                          </span>
-                        </div>
-                      </div>
-                    </a>
-                    """
-                    st.markdown(row_html, unsafe_allow_html=True)
-            
-            # Show maximum supporting sources
-            if max_sources:
-                st.markdown(f"#### 💎 Maximum ({cur} {max_v:,} {unit})")
-                for s in max_sources:
-                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    url = (s.get("url") or "").replace('"', "%22")
-                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    geo = (s.get("geo") or "Nearby/Unclear").strip()
-                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
-
-                    try:
-                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
-                    except Exception:
-                        strength_i = 55
-
-                    row_html = f"""
-                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                      <div class="jr-source-ico">↗</div>
-                      <div style="min-width:0; width:100%;">
-                        <div class="jr-source-main">{title}</div>
-                        <div class="jr-source-sub">
-                          <span>Supports: {rng}</span>
-                          <span class="jr-geo-pill">{geo_label}</span>
-                          <span class="jr-score-pill">
-                            <span>Strength</span>
-                            <span>{strength_i}/100</span>
-                            <span class="jr-score-bar">
-                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
-                            </span>
-                          </span>
-                        </div>
-                      </div>
-                    </a>
-                    """
-                    st.markdown(row_html, unsafe_allow_html=True)
-            
-            # Show general sources
-            if general_sources:
-                st.markdown("#### 📊 General Range Sources")
-                for s in general_sources:
-                    title = (s.get("title") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    url = (s.get("url") or "").replace('"', "%22")
-                    rng = (s.get("range") or "Source").replace("<", "&lt;").replace(">", "&gt;")
-                    geo = (s.get("geo") or "Nearby/Unclear").strip()
-                    geo_label = "Exact" if geo == "Exact" else ("Country-level" if geo == "Country-level" else "Nearby/Unclear")
-
-                    try:
-                        strength_i = int(max(0, min(100, int(s.get("strength", 55)))))
-                    except Exception:
-                        strength_i = 55
-
-                    row_html = f"""
-                    <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
-                      <div class="jr-source-ico">↗</div>
-                      <div style="min-width:0; width:100%;">
-                        <div class="jr-source-main">{title}</div>
-                        <div class="jr-source-sub">
-                          <span>{rng}</span>
-                          <span class="jr-geo-pill">{geo_label}</span>
-                          <span class="jr-score-pill">
-                            <span>Strength</span>
-                            <span>{strength_i}/100</span>
-                            <span class="jr-score-bar">
-                              <span class="jr-score-fill" style="width:{strength_i}%;"></span>
-                            </span>
-                          </span>
-                        </div>
-                      </div>
-                    </a>
-                    """
-                    st.markdown(row_html, unsafe_allow_html=True)
+                row_html = f"""
+                <a class="jr-source" href="{url}" target="_blank" rel="noopener noreferrer">
+                  <div class="jr-source-ico">↗</div>
+                  <div style="min-width:0; width:100%;">
+                    <div class="jr-source-main">{title}</div>
+                    <div class="jr-source-sub">
+                      <span>Reported Range: {rng}</span>
+                      <span class="jr-geo-pill">{geo_label}</span>
+                      <span class="jr-score-pill">
+                        <span>Source Strength</span>
+                        <span>{strength_i}/100</span>
+                        <span class="jr-score-bar">
+                          <span class="jr-score-fill" style="width:{strength_i}%;"></span>
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                </a>
+                """
+                st.markdown(row_html, unsafe_allow_html=True)
 
         st.markdown(
             """
             <div class="jr-note">
-              <strong>Note:</strong> Sources are categorized by whether they support the minimum, maximum, or general range. 
-              Large ranges may reflect differences in experience level, company size, or role seniority.
+              <strong>Note:</strong> The estimated range is calculated from the salary data in these sources.
+              Wide ranges may reflect differences in experience level, company size, or role seniority.
             </div>
             """,
             unsafe_allow_html=True,
