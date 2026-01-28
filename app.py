@@ -69,30 +69,31 @@ APP_CSS = """
   }
   .stButton button:hover{filter:brightness(1.05);}
   .jr-range{
-    background:linear-gradient(90deg,var(--accent),var(--accent2));
-    border-radius:20px;padding:28px 32px;color:white;box-shadow:var(--shadow);
-    border:1px solid rgba(255,255,255,.15);margin-top:20px;
+    background:linear-gradient(135deg,#6d5efc 0%,#9b4dff 50%,#c840e9 100%);
+    border-radius:24px;padding:32px 40px;color:white;
+    box-shadow:0 20px 60px rgba(109,94,252,.4);
+    border:1px solid rgba(255,255,255,.2);margin-top:24px;
   }
-  .jr-range-top{display:flex;gap:14px;align-items:center;margin-bottom:18px;}
-  .jr-range-icon{width:36px;height:36px;border-radius:12px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;}
-  .jr-range-title{font-size:22px;font-weight:800;margin:0;letter-spacing:-0.01em;}
-  .jr-range-grid{display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap;}
-  .jr-range-label{font-size:13px;color:rgba(255,255,255,.7);margin:0 0 4px 0;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;}
-  .jr-range-amt{font-size:48px;font-weight:900;margin:0;line-height:1;letter-spacing:-0.02em;}
-  .jr-range-unit{font-size:14px;color:rgba(255,255,255,.7);margin:6px 0 0 0;font-weight:500;}
-  .jr-dash{font-size:36px;color:rgba(255,255,255,.5);margin:0 8px;padding-bottom:18px;font-weight:300;}
+  .jr-range-top{display:flex;gap:16px;align-items:center;margin-bottom:24px;}
+  .jr-range-icon{width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;}
+  .jr-range-title{font-size:26px;font-weight:800;margin:0;letter-spacing:-0.02em;}
+  .jr-range-grid{display:flex;align-items:flex-end;gap:40px;flex-wrap:wrap;}
+  .jr-range-label{font-size:11px;color:rgba(255,255,255,.6);margin:0 0 8px 0;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;}
+  .jr-range-amt{font-size:56px;font-weight:900;margin:0;line-height:1;letter-spacing:-0.03em;text-shadow:0 2px 20px rgba(0,0,0,.2);}
+  .jr-range-unit{font-size:15px;color:rgba(255,255,255,.65);margin:10px 0 0 0;font-weight:600;}
+  .jr-dash{font-size:40px;color:rgba(255,255,255,.4);margin:0 10px;padding-bottom:20px;font-weight:200;}
   .jr-source{
-    display:flex;gap:12px;align-items:flex-start;padding:12px;
-    border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.14);
-    text-decoration:none!important;margin-bottom:10px;
+    display:flex;gap:12px;align-items:flex-start;padding:14px 16px;
+    border:1px solid var(--border);border-radius:14px;background:rgba(0,0,0,.18);
+    text-decoration:none!important;margin-bottom:12px;transition:all .2s ease;
   }
-  .jr-source:hover{border-color:rgba(109,94,252,.55);background:rgba(109,94,252,.08);}
+  .jr-source:hover{border-color:rgba(109,94,252,.6);background:rgba(109,94,252,.12);transform:translateY(-1px);}
   .jr-source-ico{
-    width:22px;height:22px;border-radius:8px;background:rgba(109,94,252,.22);
-    display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;font-size:12px;
+    width:24px;height:24px;border-radius:8px;background:rgba(109,94,252,.25);
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:2px;font-size:12px;color:var(--accent);
   }
-  .jr-source-main{color:var(--text);font-weight:700;margin:0;font-size:13px;line-height:1.2;}
-  .jr-source-sub{color:var(--muted);margin:3px 0 0 0;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .jr-source-main{color:var(--text);font-weight:700;margin:0;font-size:14px;line-height:1.3;}
+  .jr-source-sub{color:var(--muted);margin:4px 0 0 0;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   .jr-score-pill{
     display:inline-flex;align-items:center;gap:8px;padding:4px 8px;border-radius:999px;
     border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.18);
@@ -373,45 +374,44 @@ def estimate_salary(job: str, country: str, state: str, city: str, rate_type: st
     
     location = ", ".join(x for x in [city, state, country] if x)
     exp_level = normalize_exp(exp)
-    output_type = "hourly rate" if rate_type == "hourly" else "annual salary"
     
-    # Build source text with clear labeling
+    # Build source text
     source_text = ""
     for i, s in enumerate(sources[:MAX_CANDIDATES_FOR_AI], 1):
         source_text += f"\n[SOURCE {i}]\nTitle: {s['title']}\nContent: {s['snippet']}\n"
     
-    prompt = f"""TASK: Extract EXACT salary numbers from the sources below for "{job}" in {location}.
+    prompt = f"""Extract salary data for "{job}" in {location}.
 
-CRITICAL: You must read the ACTUAL numbers shown in each source. Do NOT make up numbers.
+READ EACH SOURCE BELOW AND:
+1. Find any numbers that look like salaries
+2. Determine the TIME PERIOD by looking for keywords:
+   - HOURLY: "per hour", "/hr", "/hour", "hourly", "an hour", "por hora"
+   - MONTHLY: "per month", "/month", "monthly", "a month", "por mes", "mensal", "/mo", "mês"
+   - YEARLY/ANNUAL: "per year", "/year", "annual", "yearly", "a year", "por ano", "anual", "/yr", "p.a."
+   - If no period keyword found, assume {meta['period'].upper()} (default for {country})
 
-SOURCES TO READ:
+3. Convert ALL found values to ANNUAL USD:
+   - If HOURLY: multiply by 2080 to get annual
+   - If MONTHLY: multiply by 12 to get annual (or 13 for Brazil)
+   - If already ANNUAL: use as-is
+   - Convert {meta['currency']} to USD: divide by {meta['fx']}
+
+SOURCES:
 {source_text}
 
-CONVERSION RULES FOR {country}:
-- Currency: {meta['currency']} (1 USD = {meta['fx']} {meta['currency']})
-- Salaries in {country} are typically: {meta['period'].upper()}
-- To convert {meta['currency']} to USD: divide by {meta['fx']}
-- If MONTHLY salary: multiply by {meta['months']} first to get annual, THEN convert to USD
-- If HOURLY rate requested: annual USD / 2080 = hourly USD
+IMPORTANT: Look at the ACTUAL numbers in the sources. Common patterns:
+- "R$ 2.500" or "R$2500" = 2,500 BRL
+- "$50/hour" = 50 USD hourly
+- "45k-65k" = 45,000-65,000
+- "3.000 - 5.000" = 3,000-5,000
 
-EXAMPLE FOR {country}:
-If source shows "{meta['currency']} 1,000/month":
-1. Annual = 1,000 x {meta['months']} = {1000 * meta['months']:,} {meta['currency']}/year
-2. USD = {1000 * meta['months']:,} / {meta['fx']} = ${int(1000 * meta['months'] / meta['fx']):,} USD/year
-
-NOW READ THE SOURCES AND EXTRACT:
-1. What salary numbers do you see in the sources? (list them)
-2. What currency are they in?
-3. Are they hourly, monthly, or annual?
-4. Convert to annual USD
-
-Experience level "{exp_level}" means:
-- entry-level: use lower end of ranges
+For experience level "{exp_level}":
+- entry-level: use lower numbers from ranges
 - mid-level: use middle of ranges
-- senior: use higher end of ranges
+- senior: use higher numbers from ranges
 
-Return ONLY valid JSON:
-{{"min_usd": <number>, "max_usd": <number>, "sources_used": [<source numbers>], "found_values": "<what numbers you found>"}}"""
+Return ONLY this JSON:
+{{"min_usd": <annual USD number>, "max_usd": <annual USD number>, "period_found": "<hourly/monthly/annual>", "original_values": "<what you found in sources>"}}"""
 
     resp = http_post(
         "https://api.openai.com/v1/chat/completions",
@@ -419,7 +419,7 @@ Return ONLY valid JSON:
             "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
-            "max_tokens": 500
+            "max_tokens": 400
         },
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         timeout=60
@@ -428,42 +428,35 @@ Return ONLY valid JSON:
     
     text = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
     
-    # Clean and parse
+    # Clean markdown
     text = re.sub(r'^```json?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
     
-    # Try JSON parse
     min_usd, max_usd, used_sources = None, None, []
     try:
         data = json.loads(text)
         min_usd = parse_num(data.get("min_usd"))
         max_usd = parse_num(data.get("max_usd"))
-        used_sources = data.get("sources_used", [])
     except:
-        # Fallback: extract numbers
         nums = [parse_num(n) for n in re.findall(r'[\d,]+(?:\.\d+)?', text)]
-        nums = sorted([n for n in nums if n and n > 100])
+        nums = sorted([n for n in nums if n and n > 50])
         if len(nums) >= 2:
             min_usd, max_usd = nums[0], nums[-1]
     
     if not min_usd or not max_usd:
-        raise RuntimeError(f"Could not extract salary from: {text[:200]}")
+        raise RuntimeError(f"Could not extract salary: {text[:200]}")
     
     if min_usd > max_usd:
         min_usd, max_usd = max_usd, min_usd
     
+    # If user wants hourly, convert annual to hourly
+    if rate_type == "hourly":
+        min_usd = round(min_usd / HOURS_PER_YEAR, 2)
+        max_usd = round(max_usd / HOURS_PER_YEAR, 2)
+    
     # Build source list - no duplicates
     final_sources = []
     seen = set()
-    
-    if isinstance(used_sources, list):
-        for idx in used_sources:
-            if isinstance(idx, int) and 1 <= idx <= len(sources):
-                s = sources[idx - 1]
-                if s["url"] not in seen:
-                    seen.add(s["url"])
-                    final_sources.append(s)
-    
     for s in sources:
         if len(final_sources) >= MAX_SOURCES_TO_DISPLAY:
             break
@@ -472,8 +465,8 @@ Return ONLY valid JSON:
             final_sources.append(s)
     
     return {
-        "min_usd": int(round(min_usd)),
-        "max_usd": int(round(max_usd)),
+        "min_usd": int(round(min_usd)) if rate_type != "hourly" else round(min_usd, 2),
+        "max_usd": int(round(max_usd)) if rate_type != "hourly" else round(max_usd, 2),
         "pay_type": rate_type,
         "sources": final_sources,
     }
