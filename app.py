@@ -79,9 +79,9 @@ APP_CSS = """
   .jr-range-title{font-size:26px;font-weight:800;margin:0;letter-spacing:-0.02em;}
   .jr-range-grid{display:flex;align-items:flex-end;gap:40px;flex-wrap:wrap;}
   .jr-range-label{font-size:11px;color:rgba(255,255,255,.6);margin:0 0 8px 0;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;}
-  .jr-range-amt{font-size:56px;font-weight:900;margin:0;line-height:1;letter-spacing:-0.03em;text-shadow:0 2px 20px rgba(0,0,0,.2);}
-  .jr-range-unit{font-size:15px;color:rgba(255,255,255,.65);margin:10px 0 0 0;font-weight:600;}
-  .jr-dash{font-size:40px;color:rgba(255,255,255,.4);margin:0 10px;padding-bottom:20px;font-weight:200;}
+  .jr-range-amt{font-size:72px;font-weight:900;margin:0;line-height:1;letter-spacing:-0.03em;text-shadow:0 4px 30px rgba(0,0,0,.3);}
+  .jr-range-unit{font-size:16px;color:rgba(255,255,255,.65);margin:12px 0 0 0;font-weight:600;}
+  .jr-dash{font-size:48px;color:rgba(255,255,255,.35);margin:0 15px;padding-bottom:24px;font-weight:200;}
   .jr-source{
     display:flex;gap:12px;align-items:flex-start;padding:14px 16px;
     border:1px solid var(--border);border-radius:14px;background:rgba(0,0,0,.18);
@@ -380,13 +380,14 @@ def estimate_salary(job: str, country: str, state: str, city: str, rate_type: st
     for i, s in enumerate(sources[:MAX_CANDIDATES_FOR_AI], 1):
         source_text += f"\n[SOURCE {i}]\nTitle: {s['title']}\nContent: {s['snippet']}\n"
     
+    # Always ask for ANNUAL salary - we'll convert to hourly ourselves if needed
     prompt = f"""Extract salary data for "{job}" in {location}.
 
 READ EACH SOURCE BELOW AND:
 1. Find any numbers that look like salaries
 2. Determine the TIME PERIOD by looking for keywords:
    - HOURLY: "per hour", "/hr", "/hour", "hourly", "an hour", "por hora"
-   - MONTHLY: "per month", "/month", "monthly", "a month", "por mes", "mensal", "/mo", "mês"
+   - MONTHLY: "per month", "/month", "monthly", "a month", "por mes", "mensal", "/mo"
    - YEARLY/ANNUAL: "per year", "/year", "annual", "yearly", "a year", "por ano", "anual", "/yr", "p.a."
    - If no period keyword found, assume {meta['period'].upper()} (default for {country})
 
@@ -411,7 +412,7 @@ For experience level "{exp_level}":
 - senior: use higher numbers from ranges
 
 Return ONLY this JSON:
-{{"min_usd": <annual USD number>, "max_usd": <annual USD number>, "period_found": "<hourly/monthly/annual>", "original_values": "<what you found in sources>"}}"""
+{{"min_usd": <ANNUAL USD number>, "max_usd": <ANNUAL USD number>, "period_found": "<hourly/monthly/annual>", "original_values": "<what you found>"}}"""
 
     resp = http_post(
         "https://api.openai.com/v1/chat/completions",
@@ -432,27 +433,36 @@ Return ONLY this JSON:
     text = re.sub(r'^```json?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)
     
-    min_usd, max_usd, used_sources = None, None, []
+    min_annual, max_annual = None, None
     try:
         data = json.loads(text)
-        min_usd = parse_num(data.get("min_usd"))
-        max_usd = parse_num(data.get("max_usd"))
+        min_annual = parse_num(data.get("min_usd"))
+        max_annual = parse_num(data.get("max_usd"))
     except:
         nums = [parse_num(n) for n in re.findall(r'[\d,]+(?:\.\d+)?', text)]
         nums = sorted([n for n in nums if n and n > 50])
         if len(nums) >= 2:
-            min_usd, max_usd = nums[0], nums[-1]
+            min_annual, max_annual = nums[0], nums[-1]
     
-    if not min_usd or not max_usd:
+    if not min_annual or not max_annual or min_annual <= 0 or max_annual <= 0:
         raise RuntimeError(f"Could not extract salary: {text[:200]}")
     
-    if min_usd > max_usd:
-        min_usd, max_usd = max_usd, min_usd
+    if min_annual > max_annual:
+        min_annual, max_annual = max_annual, min_annual
     
-    # If user wants hourly, convert annual to hourly
+    # Now convert to requested rate type
     if rate_type == "hourly":
-        min_usd = round(min_usd / HOURS_PER_YEAR, 2)
-        max_usd = round(max_usd / HOURS_PER_YEAR, 2)
+        # Always calculate hourly from annual (annual / 2080 hours)
+        min_result = round(min_annual / HOURS_PER_YEAR, 2)
+        max_result = round(max_annual / HOURS_PER_YEAR, 2)
+        # Ensure we don't return 0
+        if min_result < 1:
+            min_result = round(min_annual / HOURS_PER_YEAR, 2)
+        if max_result < 1:
+            max_result = round(max_annual / HOURS_PER_YEAR, 2)
+    else:
+        min_result = int(round(min_annual))
+        max_result = int(round(max_annual))
     
     # Build source list - no duplicates
     final_sources = []
@@ -465,8 +475,8 @@ Return ONLY this JSON:
             final_sources.append(s)
     
     return {
-        "min_usd": int(round(min_usd)) if rate_type != "hourly" else round(min_usd, 2),
-        "max_usd": int(round(max_usd)) if rate_type != "hourly" else round(max_usd, 2),
+        "min_usd": min_result,
+        "max_usd": max_result,
         "pay_type": rate_type,
         "sources": final_sources,
     }
@@ -503,6 +513,19 @@ st.markdown('<div class="jr-subtitle">Get competitive salary and hourly rate inf
 with st.container(border=True):
     st.text_input("Job Title *", key="job_title", placeholder="e.g., Video Editor, Software Engineer")
     st.text_input("Experience Level", key="experience_level", placeholder="e.g., Senior, 5+ years, Entry-level")
+    
+    st.text_area("Job Description (optional)", key="job_desc", placeholder="Paste job description to help find more accurate salary data...", height=120)
+    
+    uploaded = st.file_uploader("Upload Job Description (optional)", type=["txt", "pdf"], accept_multiple_files=False)
+    if uploaded is not None:
+        file_key = f"{uploaded.name}_{uploaded.size}"
+        if st.session_state.get("_uploaded_key") != file_key:
+            try:
+                text = uploaded.read().decode("utf-8", errors="ignore")
+                st.session_state["job_desc"] = text
+                st.session_state["_uploaded_key"] = file_key
+            except:
+                pass
     
     try:
         countries = get_country_list()
