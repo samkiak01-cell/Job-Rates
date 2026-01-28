@@ -70,16 +70,17 @@ APP_CSS = """
   .stButton button:hover{filter:brightness(1.05);}
   .jr-range{
     background:linear-gradient(90deg,var(--accent),var(--accent2));
-    border-radius:16px;padding:18px;color:white;box-shadow:var(--shadow);
-    border:1px solid rgba(255,255,255,.10);margin-top:16px;
+    border-radius:20px;padding:28px 32px;color:white;box-shadow:var(--shadow);
+    border:1px solid rgba(255,255,255,.15);margin-top:20px;
   }
-  .jr-range-top{display:flex;gap:12px;align-items:center;margin-bottom:10px;}
-  .jr-range-title{font-size:18px;font-weight:800;margin:0;}
-  .jr-range-grid{display:flex;align-items:flex-end;gap:22px;}
-  .jr-range-label{font-size:12px;color:rgba(255,255,255,.75);margin:0 0 2px 0;}
-  .jr-range-amt{font-size:34px;font-weight:900;margin:0;line-height:1.05;}
-  .jr-range-unit{font-size:12px;color:rgba(255,255,255,.75);margin:3px 0 0 0;}
-  .jr-dash{font-size:26px;color:rgba(255,255,255,.70);margin:0 2px;padding-bottom:12px;}
+  .jr-range-top{display:flex;gap:14px;align-items:center;margin-bottom:18px;}
+  .jr-range-icon{width:36px;height:36px;border-radius:12px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;}
+  .jr-range-title{font-size:22px;font-weight:800;margin:0;letter-spacing:-0.01em;}
+  .jr-range-grid{display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap;}
+  .jr-range-label{font-size:13px;color:rgba(255,255,255,.7);margin:0 0 4px 0;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;}
+  .jr-range-amt{font-size:48px;font-weight:900;margin:0;line-height:1;letter-spacing:-0.02em;}
+  .jr-range-unit{font-size:14px;color:rgba(255,255,255,.7);margin:6px 0 0 0;font-weight:500;}
+  .jr-dash{font-size:36px;color:rgba(255,255,255,.5);margin:0 8px;padding-bottom:18px;font-weight:300;}
   .jr-source{
     display:flex;gap:12px;align-items:flex-start;padding:12px;
     border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.14);
@@ -88,7 +89,7 @@ APP_CSS = """
   .jr-source:hover{border-color:rgba(109,94,252,.55);background:rgba(109,94,252,.08);}
   .jr-source-ico{
     width:22px;height:22px;border-radius:8px;background:rgba(109,94,252,.22);
-    display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;font-size:12px;
   }
   .jr-source-main{color:var(--text);font-weight:700;margin:0;font-size:13px;line-height:1.2;}
   .jr-source-sub{color:var(--muted);margin:3px 0 0 0;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -377,44 +378,40 @@ def estimate_salary(job: str, country: str, state: str, city: str, rate_type: st
     # Build source text with clear labeling
     source_text = ""
     for i, s in enumerate(sources[:MAX_CANDIDATES_FOR_AI], 1):
-        source_text += f"\n[Source {i}]\nURL: {s['url']}\nTitle: {s['title']}\nSnippet: {s['snippet']}\n"
+        source_text += f"\n[SOURCE {i}]\nTitle: {s['title']}\nContent: {s['snippet']}\n"
     
-    # Very explicit prompt
-    prompt = f"""You are extracting salary data. Read the sources carefully and extract the salary range.
+    prompt = f"""TASK: Extract EXACT salary numbers from the sources below for "{job}" in {location}.
 
-JOB: {job}
-LOCATION: {location}
-EXPERIENCE LEVEL: {exp_level}
-OUTPUT NEEDED: {output_type} in USD
+CRITICAL: You must read the ACTUAL numbers shown in each source. Do NOT make up numbers.
 
-COUNTRY INFO FOR {country}:
-- Local currency: {meta['currency']}
-- Exchange rate: 1 USD = {meta['fx']} {meta['currency']}
-- Salaries typically quoted as: {meta['period'].upper()}
-- If monthly, multiply by {meta['months']} to get annual
-
-STEP-BY-STEP INSTRUCTIONS:
-1. Read each source and find any salary numbers mentioned
-2. Note what currency and time period (hourly/monthly/annual) each number is in
-3. Convert ALL numbers to ANNUAL USD:
-   - If hourly: multiply by 2080
-   - If monthly: multiply by {meta['months']}
-   - If in {meta['currency']}: divide by {meta['fx']}
-4. Consider the experience level ({exp_level}) when determining the range
-5. Return the min and max as ANNUAL USD (or hourly USD if hourly rate requested)
-
-SOURCES:
+SOURCES TO READ:
 {source_text}
 
-Based on the sources above, provide the {output_type} range for a {exp_level} {job} in {location}.
+CONVERSION RULES FOR {country}:
+- Currency: {meta['currency']} (1 USD = {meta['fx']} {meta['currency']})
+- Salaries in {country} are typically: {meta['period'].upper()}
+- To convert {meta['currency']} to USD: divide by {meta['fx']}
+- If MONTHLY salary: multiply by {meta['months']} first to get annual, THEN convert to USD
+- If HOURLY rate requested: annual USD / 2080 = hourly USD
 
-Return ONLY this JSON (no other text):
-{{"min_usd": NUMBER, "max_usd": NUMBER, "sources_used": [1, 2, 3]}}
+EXAMPLE FOR {country}:
+If source shows "{meta['currency']} 1,000/month":
+1. Annual = 1,000 x {meta['months']} = {1000 * meta['months']:,} {meta['currency']}/year
+2. USD = {1000 * meta['months']:,} / {meta['fx']} = ${int(1000 * meta['months'] / meta['fx']):,} USD/year
 
-The numbers must be realistic {output_type}s in USD:
-- Annual salaries are typically $20,000 - $500,000
-- Hourly rates are typically $10 - $250
-"""
+NOW READ THE SOURCES AND EXTRACT:
+1. What salary numbers do you see in the sources? (list them)
+2. What currency are they in?
+3. Are they hourly, monthly, or annual?
+4. Convert to annual USD
+
+Experience level "{exp_level}" means:
+- entry-level: use lower end of ranges
+- mid-level: use middle of ranges
+- senior: use higher end of ranges
+
+Return ONLY valid JSON:
+{{"min_usd": <number>, "max_usd": <number>, "sources_used": [<source numbers>], "found_values": "<what numbers you found>"}}"""
 
     resp = http_post(
         "https://api.openai.com/v1/chat/completions",
@@ -422,7 +419,7 @@ The numbers must be realistic {output_type}s in USD:
             "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
-            "max_tokens": 300
+            "max_tokens": 500
         },
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         timeout=60
@@ -455,11 +452,10 @@ The numbers must be realistic {output_type}s in USD:
     if min_usd > max_usd:
         min_usd, max_usd = max_usd, min_usd
     
-    # Build source list - only include sources that were actually used, no duplicates
+    # Build source list - no duplicates
     final_sources = []
     seen = set()
     
-    # First add sources the AI said it used
     if isinstance(used_sources, list):
         for idx in used_sources:
             if isinstance(idx, int) and 1 <= idx <= len(sources):
@@ -468,7 +464,6 @@ The numbers must be realistic {output_type}s in USD:
                     seen.add(s["url"])
                     final_sources.append(s)
     
-    # Then add remaining sources up to limit
     for s in sources:
         if len(final_sources) >= MAX_SOURCES_TO_DISPLAY:
             break
@@ -611,7 +606,7 @@ if res:
     st.markdown(f"""
     <div class="jr-range">
       <div class="jr-range-top">
-        <div style="width:28px;height:28px;border-radius:10px;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;font-weight:900;">$</div>
+        <div class="jr-range-icon">$</div>
         <div class="jr-range-title">Estimated Rate Range</div>
       </div>
       <div class="jr-range-grid">
@@ -620,7 +615,7 @@ if res:
           <p class="jr-range-amt">{res["currency"]} {res["min"]:,}</p>
           <p class="jr-range-unit">{unit}</p>
         </div>
-        <div class="jr-dash">—</div>
+        <div class="jr-dash">-</div>
         <div>
           <p class="jr-range-label">Maximum</p>
           <p class="jr-range-amt">{res["currency"]} {res["max"]:,}</p>
@@ -632,7 +627,7 @@ if res:
     
     if res.get("sources"):
         with st.container(border=True):
-            st.markdown("### Sources")
+            st.markdown("#### Sources")
             for s in res["sources"]:
                 title = html.escape(pretty_label(s["url"]))
                 url = html.escape(s["url"], quote=True)
@@ -641,7 +636,7 @@ if res:
                 
                 st.markdown(f"""
                 <a class="jr-source" href="{url}" target="_blank">
-                  <div class="jr-source-ico">↗</div>
+                  <div class="jr-source-ico">+</div>
                   <div style="min-width:0;width:100%;">
                     <div class="jr-source-main">{title}</div>
                     <div class="jr-source-sub">
