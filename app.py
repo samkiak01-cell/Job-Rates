@@ -574,23 +574,59 @@ CRITICAL VALIDATION:
     
     text_out = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
     
-    # Clean markdown
+    # Clean markdown code blocks
     text_out = re.sub(r'^```(?:json)?\s*', '', text_out)
     text_out = re.sub(r'\s*```$', '', text_out)
+    text_out = text_out.strip()
     
+    min_usd = None
+    max_usd = None
+    
+    # Try to parse as JSON first
     try:
         parsed = json.loads(text_out)
-    except:
-        m = re.search(r'\{[^}]+\}', text_out)
-        if not m:
-            raise RuntimeError(f"Invalid JSON: {text_out[:200]}")
-        parsed = json.loads(m.group(0))
+        min_usd = parse_number_like(parsed.get("min_usd"))
+        max_usd = parse_number_like(parsed.get("max_usd"))
+    except json.JSONDecodeError:
+        pass
     
-    min_usd = parse_number_like(parsed.get("min_usd")) or 0
-    max_usd = parse_number_like(parsed.get("max_usd")) or 0
+    # If JSON parsing failed, try to find JSON object in the text
+    if min_usd is None or max_usd is None:
+        try:
+            # Look for JSON-like pattern
+            m = re.search(r'\{[^{}]*\}', text_out)
+            if m:
+                # Try to fix common JSON issues (single quotes, trailing commas)
+                json_str = m.group(0)
+                json_str = json_str.replace("'", '"')
+                json_str = re.sub(r',\s*}', '}', json_str)
+                parsed = json.loads(json_str)
+                min_usd = parse_number_like(parsed.get("min_usd"))
+                max_usd = parse_number_like(parsed.get("max_usd"))
+        except:
+            pass
     
-    if min_usd <= 0 or max_usd <= 0:
-        raise RuntimeError(f"Invalid values: {min_usd}, {max_usd}")
+    # Last resort: extract numbers directly with regex
+    if min_usd is None or max_usd is None:
+        # Look for patterns like "min_usd": 25000 or min: 25000 or minimum: $25,000
+        numbers = re.findall(r'[\$]?\s*([\d,]+(?:\.\d+)?)\s*(?:k|K)?', text_out)
+        numbers = [parse_number_like(n.replace(',', '')) for n in numbers if n]
+        numbers = [n for n in numbers if n and n > 0]
+        
+        if len(numbers) >= 2:
+            # Sort and take what looks like min/max
+            numbers.sort()
+            # Filter out very small numbers (probably not salaries)
+            salary_numbers = [n for n in numbers if n >= 100]  # At least $100
+            if len(salary_numbers) >= 2:
+                min_usd = salary_numbers[0]
+                max_usd = salary_numbers[-1]
+            elif len(numbers) >= 2:
+                min_usd = numbers[0]
+                max_usd = numbers[-1]
+    
+    if min_usd is None or max_usd is None or min_usd <= 0 or max_usd <= 0:
+        raise RuntimeError(f"Could not extract salary values from AI response: {text_out[:300]}")
     
     # AGGRESSIVE SANITY CHECK FOR ANNUAL SALARIES
     if pay_type == "ANNUAL":
