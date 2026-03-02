@@ -426,22 +426,33 @@ def run_analysis(
             "Try a more common job title or broader location."
         )
 
-    # 4. Statistics
-    stats = compute_stats(annual_values)
-
-    # 5. AI recommended range
+    # 4. AI recommended range (extract first — needed for stats filtering)
     ai_min = parse_num(ai_data.get("ai_recommended_min_usd")) or min(annual_values)
     ai_max = parse_num(ai_data.get("ai_recommended_max_usd")) or max(annual_values)
     ai_mid = parse_num(ai_data.get("ai_recommended_mid_usd")) or ((ai_min + ai_max) / 2)
     if ai_min > ai_max:
         ai_min, ai_max = ai_max, ai_min
 
+    # 5. Statistics — pass AI range for sanity-check outlier removal
+    stats = compute_stats(annual_values, ai_min=ai_min, ai_max=ai_max)
+
+    # 6. Filter data_points to match what stats kept (remove outliers from evidence too)
+    if stats:
+        kept_min = stats["min"]
+        kept_max = stats["max"]
+        data_points_filtered = [
+            dp for dp in data_points
+            if dp.get("annual_usd") and kept_min <= dp["annual_usd"] <= kept_max
+        ]
+    else:
+        data_points_filtered = data_points
+
     return {
         "job": core_job,
         "location": ", ".join(x for x in [city, state, country] if x),
         "rate_type": rate_type,
         "sources": sources[:MAX_DISPLAYED_SOURCES],
-        "data_points": data_points,
+        "data_points": data_points_filtered,
         "annual_values": annual_values,
         "stats": stats,
         "ai_min_usd": ai_min,
