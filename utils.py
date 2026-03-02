@@ -267,31 +267,54 @@ def display_unit(rate_type: str, currency: str) -> str:
 # ─────────────────────────────────────────────
 # Statistics
 # ─────────────────────────────────────────────
-def compute_stats(values: List[float]) -> Optional[Dict[str, Any]]:
+def compute_stats(
+    values: List[float],
+    ai_min: Optional[float] = None,
+    ai_max: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Compute mean, stdev, and sigma ranges from annual USD values.
-    Uses IQR-based outlier removal for robustness before computing stats.
-    Returns None if fewer than 2 values.
+
+    Two-pass outlier removal:
+      1. Standard IQR (1.5×) to remove extreme statistical outliers.
+      2. AI-range sanity check: if Claude gave a recommended range, also remove
+         points that are > 3× the AI max or < 1/4 the AI min — these are almost
+         certainly wrong-country or wrong-job data that slipped through.
+
+    Returns None if fewer than 2 values survive filtering.
     """
     if len(values) < 2:
         return None
 
-    # Sort for percentile calculations
     sorted_vals = sorted(values)
     n = len(sorted_vals)
 
-    # IQR-based outlier filtering (only if we have enough data)
+    # ── Pass 1: IQR-based outlier removal (standard 1.5×) ──
     if n >= 5:
         q1_idx = n // 4
         q3_idx = (3 * n) // 4
         q1 = sorted_vals[q1_idx]
         q3 = sorted_vals[q3_idx]
         iqr = q3 - q1
-        lower_fence = q1 - 2.0 * iqr  # generous 2x IQR to keep more data
-        upper_fence = q3 + 2.0 * iqr
+        lower_fence = q1 - 1.5 * iqr
+        upper_fence = q3 + 1.5 * iqr
         filtered = [v for v in sorted_vals if lower_fence <= v <= upper_fence]
         if len(filtered) >= 2:
             sorted_vals = filtered
+
+    # ── Pass 2: AI-range sanity check ──
+    # If Claude's recommended range exists, use it to catch data from wrong
+    # countries/jobs that IQR alone can't detect (e.g., US salaries mixed into
+    # a Brazil search). We use generous bounds: 0.25× AI min to 3× AI max.
+    if ai_min and ai_max and ai_min > 0 and ai_max > 0:
+        sanity_lo = ai_min * 0.25
+        sanity_hi = ai_max * 3.0
+        sanity_filtered = [v for v in sorted_vals if sanity_lo <= v <= sanity_hi]
+        if len(sanity_filtered) >= 2:
+            sorted_vals = sanity_filtered
+
+    if len(sorted_vals) < 2:
+        return None
 
     mean = statistics.mean(sorted_vals)
 
@@ -328,8 +351,32 @@ def compute_stats(values: List[float]) -> Optional[Dict[str, Any]]:
 
 
 def find_evidence_for_range(lo: float, hi: float, data_points: List[Dict], max_evidence: int = 3) -> List[Dict]:
-    """Return up to `max_evidence` data points whose annual_usd falls within [lo, hi]."""
+    """
+    Return up to `max_evidence` data points within [lo, hi].
+    Deduplicates by source host so you don't see the same site 3 times.
+    """
     hits = [dp for dp in data_points if dp.get("annual_usd") and lo <= dp["annual_usd"] <= hi]
     # Sort by confidence descending, then by source quality
     hits.sort(key=lambda d: (d.get("confidence", 0), d.get("quality", 0)), reverse=True)
-    return hits[:max_evidence]
+
+    # Deduplicate by host — prefer highest-confidence entry per host
+    seen_hosts: set = set()
+    deduped: List[Dict] = []
+    for dp in hits:
+        h = dp.get("host", "")
+        if h and h in seen_hosts:
+            continue
+        seen_hosts.add(h)
+        deduped.append(dp)
+        if len(deduped) >= max_evidence:
+            break
+
+    # If dedup was too aggressive and we have fewer than max, backfill
+    if len(deduped) < max_evidence:
+        for dp in hits:
+            if dp not in deduped:
+                deduped.append(dp)
+                if len(deduped) >= max_evidence:
+                    break
+
+    return deduped[:max_evidence]
