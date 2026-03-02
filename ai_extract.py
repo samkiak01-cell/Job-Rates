@@ -25,19 +25,27 @@ from utils import (
 # ─────────────────────────────────────────────
 SYSTEM_PROMPT = """You are a compensation data analyst specializing in extracting and normalizing salary data from web search snippets.
 
-YOUR TASK: Extract every salary/compensation data point you can find and return structured JSON.
+YOUR TASK: Extract salary data points and return structured JSON.
 
-CRITICAL RULES:
-1. Extract ALL data points — do not skip any salary numbers you find.
-2. Convert everything to ANNUAL USD. Show your conversion logic.
-3. Salary ranges like "$60k–$90k" become TWO data points (60000 and 90000).
-4. "Average $75k" becomes ONE data point (75000).
+CRITICAL ACCURACY RULES:
+1. ONLY extract data for the EXACT job title requested (or very close variants). "Video Editor" and "Film Director" are NOT the same job. "Software Engineer" and "IT Support" are NOT the same job.
+2. ONLY extract data for the CORRECT COUNTRY/LOCATION. If the search is for Brazil, ignore any US/UK/etc salary data that crept into results. Pay close attention to currency symbols and context clues.
+3. Convert everything to ANNUAL USD. Be precise about currency detection:
+   - R$ or BRL = Brazilian Real
+   - $ alone near US context = USD
+   - £ = GBP
+   - € = EUR
+   - ¥ = JPY or CNY (determine from context)
+4. Salary ranges like "$60k–$90k" → TWO data points (low end and high end).
 5. Hourly rates → multiply by 2080 for annual.
-6. Monthly rates → multiply by 12 for annual.
-7. Foreign currency → divide by the exchange rate to get USD.
-8. Assign confidence 0.0-1.0 based on source reputation and data specificity.
-9. Do NOT invent or hallucinate numbers — only extract what's explicitly stated.
-10. If a snippet is irrelevant to the job title, skip it entirely.
+6. Monthly rates → multiply by 12 for annual, THEN convert currency to USD.
+7. Assign confidence scores honestly:
+   - 0.85-1.0: Major salary databases (Glassdoor, Indeed, PayScale, Salary.com, Levels.fyi) with specific data for this exact role+location
+   - 0.6-0.84: Job postings with stated salary, or salary sites with approximate/estimated data
+   - 0.3-0.59: Blog posts, forums, or data that's tangentially related
+   - Below 0.3: Don't include it at all
+8. Do NOT extract data that is clearly for a different profession, different country, or a different seniority level disguised as the target role.
+9. When in doubt about a conversion or whether data is relevant, SKIP IT. Precision > volume.
 
 Return ONLY valid JSON. No markdown fences. No commentary outside the JSON."""
 
@@ -104,24 +112,29 @@ SEARCH RESULTS TO ANALYZE:
 EXTRACTION INSTRUCTIONS:
 ─────────────────────────────────
 
-For EACH salary number you find:
-1. Note the raw value, its currency, and its period (annual/monthly/hourly)
-2. Convert to ANNUAL USD using the exchange rate above
-3. Label it with context (role level, location specifics, source type)
-4. Rate confidence: 0.9+ for major salary DBs, 0.7 for job postings, 0.5 for estimates/blogs
+STEP 1 — FILTER: For each source, determine:
+  a) Is this about the correct job title (or a very close variant)?
+  b) Is this about the correct country/region?
+  c) Does it contain actual salary numbers?
+  If ANY answer is NO, skip the entire source.
 
-IMPORTANT:
-- Extract EVERYTHING — junior, mid, senior, all levels. The statistical model needs volume.
-- Salary ranges "X to Y" → extract BOTH X and Y as separate data points
-- "Base salary" and "total compensation" are BOTH valid — label them differently
-- Ignore data clearly for a different profession (e.g., nurse salary on a software engineer search)
-- If a source gives percentile data (10th, 25th, 50th, 75th, 90th), extract ALL percentiles
+STEP 2 — EXTRACT: For each valid salary number:
+  1. Identify the currency from context (symbols, country mentions, site domain)
+  2. Identify the pay period (annual, monthly, hourly, weekly)
+  3. Convert to ANNUAL amount in the local currency first
+  4. Then convert to USD: divide by {meta['fx']}
+  5. Label with context (role variant, data type, source name)
 
-After extracting all data points, compute an AI RECOMMENDED RANGE:
-- This should represent a realistic offer range for this role + location + experience level
-- Weight higher-confidence sources more heavily
-- Account for the target experience level if provided
-- Be specific — don't just average everything
+STEP 3 — VALIDATE your extractions:
+  - Do the USD values make sense for {country}? A video editor in Brazil earning $100k+ USD is suspicious.
+  - Are there data points from the wrong country mixed in? Remove them.
+  - Did you accidentally use the wrong exchange rate or pay period? Double-check.
+
+STEP 4 — RECOMMEND a realistic range:
+  - Based on ONLY the validated, high-confidence data points
+  - Factor in the target experience level if provided
+  - The min/max should represent a realistic offer range, NOT statistical extremes
+  - The midpoint should be what a typical candidate would expect
 
 Return ONLY this JSON structure:
 {{
@@ -130,17 +143,17 @@ Return ONLY this JSON structure:
       "value_annual_usd": <number>,
       "source_idx": <1-based source number>,
       "label": "<brief: level, location, data type e.g. 'Senior, base salary, Glassdoor'>",
-      "confidence": <0.0 to 1.0>,
-      "original_value": "<raw value as found e.g. '$45/hr' or '£55,000/yr'>",
-      "conversion_note": "<how you converted e.g. '45 * 2080 = 93600'>"
+      "confidence": <0.3 to 1.0>,
+      "original_value": "<raw value as found e.g. 'R$ 5,000/month' or '$45/hr'>",
+      "conversion_note": "<step by step: 'R$ 5000/mo × 12 = R$ 60000/yr ÷ 5.0 = $12,000 USD'>"
     }}
   ],
   "ai_recommended_min_usd": <number>,
   "ai_recommended_max_usd": <number>,
   "ai_recommended_mid_usd": <number>,
-  "ai_summary": "<3-4 sentence analysis: market overview, confidence level, key factors affecting pay, any notable patterns>",
+  "ai_summary": "<3-4 sentences: market overview for this role in {location}, confidence level, key pay factors, patterns noticed>",
   "currency_used": "{meta['currency']}",
-  "warnings": ["<any data quality issues, e.g. limited data, mixed roles, stale sources>"]
+  "warnings": ["<any data quality issues, e.g. 'Limited data specific to this city', 'Mixed seniority levels in results'>"]
 }}"""
 
 
@@ -224,7 +237,7 @@ def process_extraction(
     sources: List[Dict],
 ) -> tuple[List[float], List[Dict]]:
     """
-    Process Claude's extraction output into clean data points.
+    Process Claude extraction output into clean data points.
     Returns (annual_values, data_points_with_source_info).
     """
     raw_points = ai_data.get("data_points") or []
