@@ -174,6 +174,20 @@ label, .stMarkdown p { color: var(--mt) !important; font-size: 13px !important; 
 }
 
 header, footer { visibility: hidden; }
+
+.bd-reliability {
+  font-size: 10px; font-weight: 600; letter-spacing: .06em;
+  padding: 2px 7px; border-radius: 5px; white-space: nowrap; flex-shrink: 0; font-family: var(--mono);
+}
+.bd-reliability[data-level="high"]   { color: var(--teal);  background: var(--teal-d);  }
+.bd-reliability[data-level="medium"] { color: var(--blue);  background: var(--blue-d);  }
+.bd-reliability[data-level="low"]    { color: var(--amber); background: var(--amber-d); }
+.low-data-warning {
+  display:flex; align-items:center; gap:10px; margin:0 0 14px; padding:12px 16px;
+  border-radius:10px; border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.06);
+  font-size:13px; color:var(--amber); line-height:1.5;
+}
+.band-divider { height:1px; background:var(--b1); margin:6px 0 10px; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -208,36 +222,12 @@ def render_evidence(
 # Adaptive range logic
 # -----------------------------------------------------------------
 RANGE_LABELS = {
-    1: ("Typical Range", "Where most salaries fall (~68% of the market)", "var(--blue)", "var(--blue-d)"),
-    2: ("Extended Range", "Includes above and below average roles (~95%)", "var(--teal)", "var(--teal-d)"),
-    3: ("Full Spread", "Nearly all reported salaries (~99.7%)", "var(--amber)", "var(--amber-d)"),
+    0: ("AI Recommended",   "Recommended offer range based on Claude's data analysis",              "var(--blue)",  "var(--blue-d)"),
+    1: ("Typical Range",    "Where most salaries fall — within 1 standard deviation (~68%)",        "var(--teal)",  "var(--teal-d)"),
+    2: ("Extended Range",   "Includes above- and below-average roles — within 2σ (~95%)",           "var(--teal)",  "rgba(20,184,166,.04)"),
+    3: ("Full Spread",      "Nearly all reported salaries — within 3 standard deviations (~99.7%)", "var(--amber)", "var(--amber-d)"),
+    4: ("Observed Min/Max", "Actual lowest and highest values after outlier removal",                "var(--mt)",    "rgba(255,255,255,.02)"),
 }
-
-
-def should_show_sigma(sigma: int, lo: float, hi: float, stats: Dict) -> bool:
-    """Decide if a sigma band adds new information worth showing."""
-    obs_min, obs_max = stats["min"], stats["max"]
-    display_lo = max(lo, obs_min)
-    display_hi = min(hi, obs_max)
-
-    if sigma == 1:
-        return True
-
-    prev_lo, prev_hi = stats[f"sigma{sigma - 1}"]
-    prev_lo_d = max(prev_lo, obs_min)
-    prev_hi_d = min(prev_hi, obs_max)
-
-    # Skip if clamped range is basically the same as previous
-    if abs(display_lo - prev_lo_d) < 100 and abs(display_hi - prev_hi_d) < 100:
-        return False
-
-    # Need enough data for wider bands to be meaningful
-    if sigma == 2 and stats["count"] < 5:
-        return False
-    if sigma == 3 and stats["count"] < 8:
-        return False
-
-    return True
 
 
 def compute_confidence(stats: Optional[Dict], n_sources: int) -> tuple:
@@ -257,6 +247,35 @@ def compute_confidence(stats: Optional[Dict], n_sources: int) -> tuple:
         if n < 5:
             parts.append("More data would improve accuracy.")
         return ("Low", " ".join(parts), "var(--amber)")
+
+
+# -----------------------------------------------------------------
+# Reliability badge + band row helpers
+# -----------------------------------------------------------------
+def reliability_badge(n_points: int) -> str:
+    if n_points >= 5:
+        return f'<span class="bd-reliability" data-level="high">{n_points} pts</span>'
+    elif n_points >= 2:
+        return f'<span class="bd-reliability" data-level="medium">{n_points} pts</span>'
+    return f'<span class="bd-reliability" data-level="low">{n_points} pts</span>'
+
+
+def render_band_row(label, desc, color, bg_color, lo_s, hi_s, avg_s, curr, unit, ev_html, n_points, featured=False) -> str:
+    badge = reliability_badge(n_points)
+    feat_attr = 'data-featured="true"' if featured else 'data-featured="false"'
+    return f"""
+<div class="bd-row" {feat_attr}>
+  <span class="bd-tag" style="color:{color};background:{bg_color};">{label}</span>
+  <div class="bd-label-wrap">
+    <div class="bd-desc">{desc}</div>
+    {ev_html}
+  </div>
+  <div style="text-align:right;flex-shrink:0;">
+    <div class="bd-range">{curr} {lo_s} &ndash; {hi_s}</div>
+    <div class="bd-avg">avg {curr} {avg_s} {unit}</div>
+  </div>
+  {badge}
+</div>"""
 
 
 # -----------------------------------------------------------------
@@ -470,7 +489,7 @@ if res:
   {ev_html}
 </div>""", unsafe_allow_html=True)
 
-    # -- Market Breakdown (adaptive) --
+    # -- Market Breakdown (always 5 bands) --
     if stats:
         st.markdown('<div class="sec"><span>Market Breakdown</span></div>', unsafe_allow_html=True)
 
@@ -496,47 +515,60 @@ if res:
   {"&nbsp;&middot;&nbsp;".join(parts)}
 </div>""", unsafe_allow_html=True)
 
-        # Adaptive range rows -- only show what the data supports
+        # Low-data warning above bands
+        if count < 3:
+            st.markdown(f"""
+<div class="low-data-warning">
+  &#9888; Only {count} data point{"s" if count != 1 else ""} found — these ranges are rough estimates.
+  Try a broader job title or remove location filters for more reliable results.
+</div>""", unsafe_allow_html=True)
+
         used_ev = set()
         rows_html = ""
-        shown_any = False
 
+        # Band 0: AI Recommended
+        label0, desc0, color0, bg0 = RANGE_LABELS[0]
+        ai_min_usd = res["ai_min_usd"]
+        ai_max_usd = res["ai_max_usd"]
+        ai_avg_usd = res["ai_mid_usd"]
+        ai_n = sum(1 for dp in dps if dp.get("annual_usd") and ai_min_usd <= dp["annual_usd"] <= ai_max_usd)
+        ev0, used_ev = render_evidence(ai_min_usd, ai_max_usd, curr, rt, dps, used_ev)
+        rows_html += render_band_row(
+            label0, desc0, color0, bg0,
+            display_money(ai_min_usd, curr, rt), display_money(ai_max_usd, curr, rt),
+            display_money(ai_avg_usd, curr, rt),
+            curr, unit, ev0, ai_n, featured=True,
+        )
+
+        rows_html += '<div class="band-divider"></div>'
+
+        # Bands 1–3: sigma rows
         for sig in [1, 2, 3]:
             lo, hi = stats[f"sigma{sig}"]
-            if not should_show_sigma(sig, lo, hi, stats):
-                continue
-            shown_any = True
-            label, desc, color, bg_color = RANGE_LABELS[sig]
+            label_s, desc_s, color_s, bg_s = RANGE_LABELS[sig]
             obs_lo = max(lo, stats["min"])
             obs_hi = min(hi, stats["max"])
             lo_s = display_money(obs_lo, curr, rt)
             hi_s = display_money(obs_hi, curr, rt)
             avg_s = display_money(stats["mean"], curr, rt)
+            sig_n = stats[f"sigma{sig}_count"]
             ev_h, used_ev = render_evidence(obs_lo, obs_hi, curr, rt, dps, used_ev)
-            featured = "true" if sig == 1 else "false"
+            rows_html += render_band_row(
+                label_s, desc_s, color_s, bg_s,
+                lo_s, hi_s, avg_s, curr, unit, ev_h, sig_n,
+            )
 
-            rows_html += f"""
-<div class="bd-row" data-featured="{featured}">
-  <span class="bd-tag" style="color:{color};background:{bg_color};">{label}</span>
-  <div class="bd-label-wrap">
-    <div class="bd-desc">{desc}</div>
-    {ev_h}
-  </div>
-  <div style="text-align:right;">
-    <div class="bd-range">{curr} {lo_s} &mdash; {hi_s}</div>
-    <div class="bd-avg">avg {curr} {avg_s} {unit}</div>
-  </div>
-</div>"""
+        rows_html += '<div class="band-divider"></div>'
 
-        if shown_any:
-            st.markdown(rows_html, unsafe_allow_html=True)
+        # Band 4: Observed Min/Max
+        label4, desc4, color4, bg4 = RANGE_LABELS[4]
+        ev4, used_ev = render_evidence(stats["min"], stats["max"], curr, rt, dps, used_ev)
+        rows_html += render_band_row(
+            label4, desc4, color4, bg4,
+            min_s, max_s, mean_s, curr, unit, ev4, count,
+        )
 
-        if count < 10:
-            st.markdown(f"""
-<div class="note">
-  With only {count} data points, these ranges are approximate. Try a broader job title
-  or remove location filters to gather more data.
-</div>""", unsafe_allow_html=True)
+        st.markdown(rows_html, unsafe_allow_html=True)
 
     elif n_vals == 1:
         val_s = display_money(res["annual_values"][0], curr, rt)
