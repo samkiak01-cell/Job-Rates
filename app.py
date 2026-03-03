@@ -25,6 +25,7 @@ from utils import (
     pretty_host,
     to_currency,
 )
+import site_planner
 from search import search_web
 from ai_extract import claude_extract, process_extraction
 
@@ -227,7 +228,7 @@ label,
   background: var(--emerald); display: inline-block;
   box-shadow: 0 0 8px var(--emerald);
 }
-.ai-text { color: var(--tx2); font-size: 14px; line-height: 1.8; margin: 0; }
+.ai-text { color: var(--tx2); font-size: 15px; line-height: 1.8; margin: 0; }
 
 /* ── Confidence banner ──────────────────────── */
 .conf-banner {
@@ -308,7 +309,7 @@ label,
   text-transform: uppercase; padding: 4px 10px;
   border-radius: 7px; white-space: nowrap;
 }
-.bd-desc  { font-size: 12px; color: var(--mt); }
+.bd-desc  { font-size: 14px; color: var(--mt); }
 .bd-right { text-align: right; flex-shrink: 0; }
 .bd-range { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--tx); white-space: nowrap; }
 .bd-avg   { font-family: var(--mono); font-size: 11px; color: var(--mt); margin-top: 3px; }
@@ -351,6 +352,24 @@ label,
 .note-box {
   padding: 14px 18px; border-radius: 12px; font-size: 13px;
   border: 1px solid; margin-top: 12px; line-height: 1.6;
+}
+
+/* ── Stat cards ─────────────────────────────── */
+.stat-card {
+  background: var(--s1); border: 1px solid var(--b1);
+  border-radius: 12px; padding: 14px 16px; text-align: center;
+  margin-bottom: 8px;
+}
+.stat-card-lbl {
+  font-size: 10px; font-weight: 700; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--mt); margin-bottom: 6px;
+}
+.stat-card-val {
+  font-family: var(--mono); font-size: 22px; font-weight: 700;
+  color: var(--tx); line-height: 1.1;
+}
+.stat-card-unit {
+  font-size: 11px; color: var(--mt); margin-top: 4px;
 }
 </style>
 """
@@ -440,7 +459,14 @@ def render_band_sources(
 
     pills = ""
     for dp in ordered:
-        val  = compact_money(dp["annual_usd"], currency, rate_type)
+        # lo pill → show source's reported low-end; hi pill → high-end; avg → midpoint
+        if dp is src_lo:
+            display_usd = dp.get("value_min_usd") or dp["annual_usd"]
+        elif dp is src_hi:
+            display_usd = dp.get("value_max_usd") or dp["annual_usd"]
+        else:
+            display_usd = dp["annual_usd"]
+        val  = compact_money(display_usd, currency, rate_type)
         host = html_mod.escape((dp.get("host") or "source")[:24])
         url  = html_mod.escape(dp.get("url", "#"), quote=True)
         pills += (
@@ -508,17 +534,17 @@ BAND_SPECS = {
     ),
     1: (
         "1&sigma;&nbsp;Typical",
-        "~68% of salaries &mdash; 1 standard deviation",
+        "Middle 68% &mdash; 16th to 84th percentile",
         "#00cc55", "rgba(0,204,85,.12)", "#00cc55", "#00cc55",
     ),
     2: (
         "2&sigma;&nbsp;Extended",
-        "~95% of salaries &mdash; 2 standard deviations",
+        "Middle 95% &mdash; 2.5th to 97.5th percentile",
         "#7393f9", "rgba(115,147,249,.12)", "#7393f9", "#7393f9",
     ),
     3: (
         "3&sigma;&nbsp;Full Spread",
-        "~99.7% of salaries &mdash; 3 standard deviations",
+        "Observed full range after outlier removal",
         "#8fa6cc", "rgba(143,166,204,.1)", "#4a6080", "#8fa6cc",
     ),
     "obs": (
@@ -536,7 +562,8 @@ def compute_confidence(stats: Optional[Dict], n_sources: int) -> tuple:
     if stats is None:
         return ("Low", "Very limited data — treat as a rough estimate.", "#f5d060")
     n  = stats["count"]
-    cv = stats["stdev"] / stats["mean"] if stats["mean"] > 0 else 1.0
+    s1_lo, s1_hi = stats.get("sigma1", (stats["mean"], stats["mean"]))
+    cv = ((s1_hi - s1_lo) / 2) / stats["mean"] if stats["mean"] > 0 else 1.0
     if n >= 10 and cv < 0.35 and n_sources >= 5:
         return ("High", f"{n} data points from {n_sources} sources, consistent values.", "#00cc55")
     elif n >= 5 and cv < 0.5:
@@ -558,7 +585,10 @@ def run_analysis(
     exp_years: str, rate_type: str, job_desc: str,
 ) -> Dict:
     core_job = job.strip()
-    sources  = search_web(core_job, country, state, city)
+
+    plan = site_planner.plan_search(core_job, country, state, city, exp_years)
+
+    sources = search_web(core_job, country, state, city, plan)
     if not sources:
         raise RuntimeError("No search results found. Try a different job title or location.")
 
@@ -566,22 +596,25 @@ def run_analysis(
         job=core_job, country=country, state=state, city=city,
         exp_years=exp_years, rate_type=rate_type, job_desc=job_desc,
         sources=sources,
+        period_hint=plan.get("period_hint"),
+        market_notes=plan.get("market_notes"),
     )
-    annual_values, data_points = process_extraction(ai_data, sources)
-    if not annual_values:
+    data_table = process_extraction(ai_data, sources)
+    if not data_table:
         raise RuntimeError("Could not extract salary data. Try a more common job title or broader location.")
 
+    annual_values = [row["annual_usd"] for row in data_table]
     ai_min = parse_num(ai_data.get("ai_recommended_min_usd")) or min(annual_values)
     ai_max = parse_num(ai_data.get("ai_recommended_max_usd")) or max(annual_values)
     ai_mid = parse_num(ai_data.get("ai_recommended_mid_usd")) or ((ai_min + ai_max) / 2)
     if ai_min > ai_max:
         ai_min, ai_max = ai_max, ai_min
 
-    stats = compute_stats(annual_values, ai_min=ai_min, ai_max=ai_max)
+    stats = compute_stats(data_table, ai_min=ai_min, ai_max=ai_max)
     if stats:
-        data_points = [
-            dp for dp in data_points
-            if dp.get("annual_usd") and stats["min"] <= dp["annual_usd"] <= stats["max"]
+        data_table = [
+            row for row in data_table
+            if stats["min"] <= row["annual_usd"] <= stats["max"]
         ]
 
     return {
@@ -589,8 +622,7 @@ def run_analysis(
         "location": ", ".join(x for x in [city, state, country] if x),
         "rate_type": rate_type,
         "sources": sources[:MAX_DISPLAYED_SOURCES],
-        "data_points": data_points,
-        "annual_values": annual_values,
+        "data_table": data_table,
         "stats": stats,
         "ai_min_usd": ai_min, "ai_max_usd": ai_max, "ai_mid_usd": ai_mid,
         "ai_summary": ai_data.get("ai_summary", ""),
@@ -737,9 +769,9 @@ if not res:
 curr   = st.session_state["currency"]
 rt     = res["rate_type"]
 stats  = res.get("stats")
-dps    = res.get("data_points", [])
+dps    = res.get("data_table", [])
 unit   = display_unit(rt, curr)
-n_vals = len(res["annual_values"])
+n_vals = len(res["data_table"])
 n_src  = len(res.get("sources", []))
 mean_usd = stats["mean"] if stats else (res["ai_mid_usd"])
 
@@ -812,18 +844,27 @@ if stats:
     count    = stats["count"]
     outliers = stats["count_raw"] - count
 
-    stat_parts = [
-        f"<strong>Average</strong>&nbsp;{curr}&nbsp;{mean_s}",
-        f"<strong>Median</strong>&nbsp;{curr}&nbsp;{median_s}",
-        f"<strong>{count}&nbsp;data&nbsp;point{'s' if count != 1 else ''}</strong>",
-    ]
-    if outliers > 0:
-        stat_parts.append(f"{outliers}&nbsp;outlier{'s' if outliers != 1 else ''}&nbsp;removed")
+    # 4-column stat cards
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    for col, lbl, val in [
+        (mc1, "Average",  mean_s),
+        (mc2, "Median",   median_s),
+        (mc3, "Min",      min_s),
+        (mc4, "Max",      max_s),
+    ]:
+        col.markdown(
+            f'<div class="stat-card">'
+            f'<div class="stat-card-lbl">{lbl}</div>'
+            f'<div class="stat-card-val">{curr}&nbsp;{val}</div>'
+            f'<div class="stat-card-unit">{unit}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    st.markdown(
-        '<div class="stats-bar">' + "&nbsp;&middot;&nbsp;".join(stat_parts) + "</div>",
-        unsafe_allow_html=True,
-    )
+    caption_parts = [f"{count} data point{'s' if count != 1 else ''}"]
+    if outliers > 0:
+        caption_parts.append(f"{outliers} outlier{'s' if outliers != 1 else ''} removed")
+    st.caption(" · ".join(caption_parts))
 
     if count < 5:
         st.markdown(f"""
@@ -843,7 +884,7 @@ if stats:
 
     # Bands 1–3 — sigma
     for sig in [1, 2, 3]:
-        lo_d, hi_d  = stats[f"sigma{sig}_display"]
+        lo_d, hi_d  = stats[f"sigma{sig}"]
         lbl, desc, tc, tbg, la, ac = BAND_SPECS[sig]
         lo_s  = display_money(lo_d, curr, rt)
         hi_s  = display_money(hi_d, curr, rt)
@@ -862,7 +903,7 @@ if stats:
     st.markdown(rows_html, unsafe_allow_html=True)
 
 elif n_vals == 1:
-    val_s = display_money(res["annual_values"][0], curr, rt)
+    val_s = display_money(res["data_table"][0]["annual_usd"], curr, rt)
     st.markdown(f"""
 <div class="note-box" style="color:#f5d060;border-color:rgba(255,191,0,.3);background:rgba(255,191,0,.06);">
   Only 1 data point found ({curr} {val_s} {unit}). Try a broader job title or remove location filters.
