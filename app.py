@@ -322,14 +322,27 @@ st.markdown(CSS, unsafe_allow_html=True)
 # Render helpers
 # ─────────────────────────────────────────────
 def render_evidence_pills(
-    lo_usd: float, hi_usd: float, currency: str, rate_type: str, data_points: List[Dict]
-) -> str:
-    """Render up to 3 evidence pills for data points within a range."""
-    hits = find_evidence_for_range(lo_usd, hi_usd, data_points, max_evidence=3)
+    lo_usd: float, hi_usd: float, currency: str, rate_type: str,
+    data_points: List[Dict], exclude_ids: set = None,
+) -> tuple[str, set]:
+    """
+    Render up to 3 evidence pills for data points within a range.
+    Returns (html_string, set_of_used_dp_ids) so callers can deduplicate.
+    """
+    if exclude_ids is None:
+        exclude_ids = set()
+
+    hits = find_evidence_for_range(lo_usd, hi_usd, data_points, max_evidence=6)
+    # Filter out already-shown evidence
+    hits = [dp for dp in hits if id(dp) not in exclude_ids][:3]
+
     if not hits:
-        return ""
+        return "", exclude_ids
+
+    used = set(exclude_ids)
     pills = ""
     for dp in hits:
+        used.add(id(dp))
         val_str = display_money(dp["annual_usd"], currency, rate_type)
         lbl = html.escape((dp.get("label", "") or dp.get("host", "source"))[:50])
         url_safe = html.escape(dp.get("url", "#"), quote=True)
@@ -339,7 +352,7 @@ def render_evidence_pills(
             f'<a class="ev-pill" href="{url_safe}" target="_blank"{title_attr}>'
             f'<span class="ev-val">{currency} {val_str}</span> {lbl}</a>'
         )
-    return f'<div class="ev-row">{pills}</div>'
+    return f'<div class="ev-row">{pills}</div>', used
 
 
 def sigma_styles(sigma: int) -> tuple[str, str, str]:
@@ -360,15 +373,27 @@ def render_sigma_card(
     currency: str,
     rate_type: str,
     data_points: List[Dict],
-) -> str:
-    """Render a single sigma range card."""
+    observed_min: float,
+    observed_max: float,
+    exclude_ids: set = None,
+) -> tuple[str, set]:
+    """
+    Render a single sigma range card.
+    Clamps displayed range to observed min/max so we don't show "$0".
+    Returns (html_string, updated_exclude_ids).
+    """
     color, bg, tag = sigma_styles(sigma)
     pct = {1: "68%", 2: "95%", 3: "99.7%"}[sigma]
-    lo_s = display_money(lo_usd, currency, rate_type)
-    hi_s = display_money(hi_usd, currency, rate_type)
+
+    # Clamp to observed data range — no "$0" or unrealistic extremes
+    display_lo = max(lo_usd, observed_min)
+    display_hi = min(hi_usd, observed_max)
+
+    lo_s = display_money(display_lo, currency, rate_type)
+    hi_s = display_money(display_hi, currency, rate_type)
     avg_s = display_money(mean_usd, currency, rate_type)
     unit = display_unit(rate_type, currency)
-    ev = render_evidence_pills(lo_usd, hi_usd, currency, rate_type, data_points)
+    ev, used = render_evidence_pills(display_lo, display_hi, currency, rate_type, data_points, exclude_ids)
     highlight = "true" if sigma == 1 else "false"
     bar_pct = {1: 68, 2: 95, 3: 100}[sigma]
 
@@ -382,7 +407,7 @@ def render_sigma_card(
   <div class="sigma-avg">avg {currency} {avg_s} {unit}</div>
   <div class="sigma-bar"><div class="sigma-fill" style="width:{bar_pct}%;background:{color};"></div></div>
   {ev}
-</div>"""
+</div>""", used
 
 
 # ─────────────────────────────────────────────
@@ -655,7 +680,7 @@ if res:
     ai_min_s = display_money(res["ai_min_usd"], curr, rt)
     ai_max_s = display_money(res["ai_max_usd"], curr, rt)
     ai_mid_s = display_money(res["ai_mid_usd"], curr, rt)
-    ev_pills = render_evidence_pills(res["ai_min_usd"], res["ai_max_usd"], curr, rt, dps)
+    ev_pills, _ = render_evidence_pills(res["ai_min_usd"], res["ai_max_usd"], curr, rt, dps)
 
     st.markdown(f"""
 <div class="range-card">
@@ -720,11 +745,12 @@ if res:
 </div>
 """, unsafe_allow_html=True)
 
-        # Sigma cards
+        # Sigma cards — cascade evidence deduplication across cards
         sigma_html = '<div class="sigma-grid">'
+        used_evidence: set = set()
         for sig in [1, 2, 3]:
             lo, hi = stats[f"sigma{sig}"]
-            sigma_html += render_sigma_card(
+            card_html, used_evidence = render_sigma_card(
                 sigma=sig,
                 lo_usd=lo,
                 hi_usd=hi,
@@ -732,7 +758,11 @@ if res:
                 currency=curr,
                 rate_type=rt,
                 data_points=dps,
+                observed_min=stats["min"],
+                observed_max=stats["max"],
+                exclude_ids=used_evidence,
             )
+            sigma_html += card_html
         sigma_html += "</div>"
         st.markdown(sigma_html, unsafe_allow_html=True)
 
