@@ -13,6 +13,7 @@ from utils import (
     ANTHROPIC_URL,
     CLAUDE_MODEL,
     MAX_SOURCES_FOR_AI,
+    get_fx,
     get_meta,
     http_post,
     parse_num,
@@ -28,26 +29,73 @@ SYSTEM_PROMPT = """You are a compensation data analyst specializing in extractin
 YOUR TASK: Extract salary data points and return structured JSON.
 
 CRITICAL ACCURACY RULES:
-1. ONLY extract data for the EXACT job title requested (or very close variants). "Video Editor" and "Film Director" are NOT the same job. "Software Engineer" and "IT Support" are NOT the same job.
-2. ONLY extract data for the CORRECT COUNTRY/LOCATION. If the search is for Brazil, ignore any US/UK/etc salary data that crept into results. Pay close attention to currency symbols and context clues.
-3. Convert everything to ANNUAL USD. Be precise about currency detection:
-   - R$ or BRL = Brazilian Real
-   - $ alone near US context = USD
-   - £ = GBP
-   - € = EUR
-   - ¥ = JPY or CNY (determine from context)
-4. Salary ranges like "$60k–$90k" → TWO data points (low end and high end).
-5. Hourly rates → multiply by 2080 for annual.
-6. Monthly rates → multiply by 12 for annual, THEN convert currency to USD.
-7. Assign confidence scores honestly:
-   - 0.85-1.0: Major salary databases (Glassdoor, Indeed, PayScale, Salary.com, Levels.fyi) with specific data for this exact role+location
-   - 0.6-0.84: Job postings with stated salary, or salary sites with approximate/estimated data
-   - 0.3-0.59: Blog posts, forums, or data that's tangentially related
-   - Below 0.3: Don't include it at all
-8. Do NOT extract data that is clearly for a different profession, different country, or a different seniority level disguised as the target role.
-9. When in doubt about a conversion or whether data is relevant, SKIP IT. Precision > volume.
+
+RULE 1 — JOB TITLE PRECISION:
+Only extract data for the EXACT job title requested, or a genuinely synonymous title. Apply strict matching:
+- "Video Editor" ≠ "Videographer" (different skill set entirely)
+- "Video Editor" ≠ "Cinematographer", "Film Director", "Video Producer"
+- "Software Engineer" ≠ "IT Support", "Help Desk", "Systems Administrator"
+- "Data Analyst" ≠ "Data Scientist", "Data Engineer"
+- "Graphic Designer" ≠ "UX Designer", "Web Developer"
+For EVERY source, explicitly decide: Is this data for the correct job title? If not certain, SKIP IT.
+
+RULE 2 — COUNTRY PRECISION:
+Only extract data for the target country. Watch for these wrong-country warning signs:
+- Salary scale far too high for the target country (e.g., $80k+ for a Brazilian role with no USD context)
+- $ symbol with no mention of the target country or currency
+- .com domain with no country-specific context indicator
+- Comparison articles that mention multiple countries — only extract the target country's data
+If the source does not clearly confirm the correct country, SKIP IT.
+
+RULE 3 — CURRENCY AND PAY PERIOD:
+Convert everything to ANNUAL USD. Be precise about currency detection:
+- R$ or BRL = Brazilian Real (Brazil, typically quoted MONTHLY)
+- MXN or $ in Mexican context = Mexican Peso (typically MONTHLY)
+- PHP = Philippine Peso (typically MONTHLY)
+- ¥ in Japanese context = JPY (typically MONTHLY); ¥ in Chinese context = CNY (typically MONTHLY)
+- AED = UAE Dirham (typically MONTHLY); SAR = Saudi Riyal (typically MONTHLY)
+- $ alone near US context = USD (annually)
+- £ = GBP (annually); € = EUR (annually)
+Monthly-pay countries: Brazil, Mexico, Philippines, Japan, UAE, Saudi Arabia, China.
+If you see "R$ 5,000" with no period stated, assume MONTHLY. Conversion: value × 12 = annual local, then ÷ exchange_rate = USD.
+
+RULE 4 — CONFIDENCE SCORES:
+- 0.85–1.0: Major salary databases with specific data for exact role+location: Glassdoor, Indeed, PayScale, Salary.com, Levels.fyi, Naukri, StepStone, Seek, Reed, Catho, Vagas, Doda, JobStreet, Saramin
+- 0.6–0.84: Job postings with stated salary; regional salary sites with approximate data
+- 0.3–0.59: Blog posts, forums, or tangentially related data
+- Below 0.3: Do not include
+
+RULE 5 — FINAL SANITY CHECK before submitting JSON:
+Review your extracted data_points and ask:
+1. Are all USD values reasonable for this country and role?
+2. Did I accidentally include data from the wrong country or wrong job?
+3. Did I correctly handle monthly vs annual conversion?
+4. Does the ai_recommended range reflect reality for this country (not US norms)?
+Fix any issues before outputting JSON.
 
 Return ONLY valid JSON. No markdown fences. No commentary outside the JSON."""
+
+
+SIMILAR_BUT_DIFFERENT: Dict[str, List[str]] = {
+    "video editor":      ["videographer", "cinematographer", "film director", "video producer", "motion graphics designer"],
+    "software engineer": ["it support", "systems administrator", "data entry", "help desk", "qa tester"],
+    "data analyst":      ["data scientist", "data engineer", "business analyst", "database administrator"],
+    "graphic designer":  ["ux designer", "ui designer", "web developer", "art director", "illustrator"],
+    "accountant":        ["bookkeeper", "financial analyst", "auditor", "tax advisor"],
+    "nurse":             ["doctor", "physician", "medical assistant", "pharmacist"],
+    "teacher":           ["professor", "tutor", "school administrator", "curriculum developer"],
+    "marketing manager": ["marketing coordinator", "digital marketing specialist", "pr manager"],
+    "project manager":   ["program manager", "product manager", "scrum master", "business analyst"],
+}
+
+
+def _get_exclusion_examples(job: str) -> str:
+    job_lower = job.lower().strip()
+    for key, exclusions in SIMILAR_BUT_DIFFERENT.items():
+        if key in job_lower or job_lower in key:
+            excl_list = ", ".join(f'"{e}"' for e in exclusions)
+            return f'\nDO NOT extract data for these similar-but-different titles: {excl_list}\n'
+    return ""
 
 
 def _build_source_block(sources: List[Dict]) -> str:
@@ -77,6 +125,7 @@ def _build_user_prompt(
     meta = get_meta(country)
     location = ", ".join(x for x in [city, state, country] if x)
     source_block = _build_source_block(sources)
+    exclusion_note = _get_exclusion_examples(job)
 
     # Experience context — informational only, does NOT filter data
     exp_section = ""
@@ -89,20 +138,30 @@ def _build_user_prompt(
     # Job description context — helps Claude understand the role
     jd_section = ""
     if job_desc.strip():
-        # Truncate to avoid overwhelming the prompt
         truncated = job_desc.strip()[:1500]
         jd_section = (
             f"\nJOB DESCRIPTION CONTEXT (use to understand role scope, NOT to filter):\n"
             f"{truncated}\n"
         )
 
+    # Monthly-pay country alert
+    monthly_alert = ""
+    if meta["default_period"] == "monthly":
+        currency = meta["currency"]
+        fx = meta["fx"]
+        monthly_alert = (
+            f"\n⚠ MONTHLY-PAY COUNTRY: In {country}, salaries are typically quoted per month.\n"
+            f"Correct conversion: {currency} X/mo × 12 = {currency} (X×12)/yr ÷ {fx} = $Y USD\n"
+            f"Example: {currency} 5,000/mo × 12 = {currency} 60,000/yr ÷ {fx} = ${60000/fx:,.0f} USD\n"
+        )
+
     return f"""Extract salary data for: **{job}** in **{location}**
-{exp_section}{jd_section}
+{exclusion_note}{exp_section}{jd_section}
 COUNTRY DEFAULTS:
 - Local currency: {meta['currency']}
-- Exchange rate: 1 USD = {meta['fx']} {meta['currency']}
+- Exchange rate: 1 USD = {meta['fx']} {meta['currency']} [LIVE RATE — use exactly]
 - Typical pay period: {meta['default_period']}
-
+{monthly_alert}
 ─────────────────────────────────
 SEARCH RESULTS TO ANALYZE:
 ─────────────────────────────────
@@ -112,8 +171,10 @@ SEARCH RESULTS TO ANALYZE:
 EXTRACTION INSTRUCTIONS:
 ─────────────────────────────────
 
-STEP 1 — FILTER: For each source, determine:
-  a) Is this about the correct job title (or a very close variant)?
+STEP 1 — FILTER: For each source, write in your head:
+  "Source N is for [actual job title] in [actual country] → KEEP/SKIP because..."
+  Then apply these checks:
+  a) Is this about the correct job title (or a genuinely synonymous variant)?
   b) Is this about the correct country/region?
   c) Does it contain actual salary numbers?
   If ANY answer is NO, skip the entire source.
@@ -126,9 +187,9 @@ STEP 2 — EXTRACT: For each valid salary number:
   5. Label with context (role variant, data type, source name)
 
 STEP 3 — VALIDATE your extractions:
-  - Do the USD values make sense for {country}? A video editor in Brazil earning $100k+ USD is suspicious.
+  - Do the USD values make sense for {country}? High USD amounts for non-US countries are suspicious.
   - Are there data points from the wrong country mixed in? Remove them.
-  - Did you accidentally use the wrong exchange rate or pay period? Double-check.
+  - Did you correctly handle monthly vs annual? Check monthly-pay countries carefully.
 
 STEP 4 — RECOMMEND a realistic range:
   - Based on ONLY the validated, high-confidence data points
@@ -191,7 +252,7 @@ def claude_extract(
         ANTHROPIC_URL,
         json_body={
             "model": CLAUDE_MODEL,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "system": SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_prompt}],
         },
