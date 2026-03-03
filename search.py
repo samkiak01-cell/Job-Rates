@@ -1,11 +1,12 @@
 """
 search.py -- Web search strategy for Job Rate Finder
-Aggressive multi-query approach to maximize unique sources and data points.
+Runs SerpAPI queries and direct scraping in parallel for maximum source coverage.
 """
 
 from __future__ import annotations
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 from utils import (
@@ -20,6 +21,7 @@ from utils import (
     secret,
     source_quality,
 )
+from scraper import run_scraper
 
 _CURRENT_YEAR = datetime.date.today().year
 
@@ -46,15 +48,14 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
     Build an aggressive set of search queries to maximize unique sources.
 
     Strategy:
-    - 6+ generic queries with varying keywords (salary, pay, compensation, wage, earnings)
+    - 12 generic queries with varying keywords
     - 12 site-specific queries hitting every major salary database
-    - Location at multiple granularity levels
-    - Variant phrasings to catch different page types
-    - NO experience/level in queries (shrinks results)
-    - NO job description text (adds noise)
+    - Country-specific local salary site queries
+    - Local-language templates
+    - 5 alternate phrasing queries
     """
     core_job = job.split("|")[0].strip() if "|" in job else job.strip()
-    loc_full = ", ".join(x for x in [city, state, country] if x)
+    loc_full   = ", ".join(x for x in [city, state, country] if x)
     loc_region = ", ".join(x for x in [state, country] if x) or country
 
     queries = []
@@ -84,7 +85,7 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
             f'how much does a {core_job} make in {city}',
         ]
 
-    # -- State/region queries (if state provided but different from country) --
+    # -- State/region queries (if state provided) --
     if state and state != country:
         queries += [
             f'"{core_job}" salary {state}',
@@ -96,14 +97,12 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
         queries.append(f'site:{site} "{core_job}" salary {country}')
 
     # -- Country-specific local salary site queries --
-    country_sites = COUNTRY_SALARY_SITES.get(country, [])
-    for site in country_sites:
+    for site in COUNTRY_SALARY_SITES.get(country, []):
         queries.append(f'site:{site} "{core_job}" salary')
         queries.append(f'site:{site} {core_job}')
 
     # -- Local-language queries --
-    local_templates = COUNTRY_LOCAL_QUERIES.get(country, [])
-    for tmpl in local_templates:
+    for tmpl in COUNTRY_LOCAL_QUERIES.get(country, []):
         queries.append(tmpl.format(job=core_job))
 
     # -- Alternate phrasing queries --
@@ -118,10 +117,10 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
     return queries
 
 
-def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, Any]]:
+def _search_serpapi(job: str, country: str, state: str, city: str) -> List[Dict[str, Any]]:
     """
-    Execute all queries and return deduplicated, quality-scored results.
-    Aims to collect as many unique sources as possible up to MAX_SEARCH_RESULTS.
+    Execute all SerpAPI queries and return deduplicated, quality-scored results.
+    Collects up to MAX_SEARCH_RESULTS unique sources.
     """
     key = secret("SERPAPI_API_KEY")
     queries = build_queries(job, country, state, city)
@@ -135,7 +134,6 @@ def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, 
     for q in queries:
         if len(results) >= MAX_SEARCH_RESULTS:
             break
-        # If too many queries are failing, stop early
         if failed_queries > 5:
             break
         try:
@@ -158,8 +156,6 @@ def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, 
                     continue
 
                 h = host_of(url)
-
-                # Allow up to 6 results per host (increased for more data)
                 host_count = seen_hosts_count.get(h, 0)
                 if host_count >= 6:
                     continue
@@ -184,6 +180,34 @@ def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, 
             failed_queries += 1
             continue
 
-    # Sort: high-quality salary sites first, then by snippet richness
     results.sort(key=lambda x: (x["quality"], len(x.get("snippet", ""))), reverse=True)
-    return results[:MAX_SEARCH_RESULTS]
+    return results
+
+
+def _merge_sources(serp: List[Dict], scraped: List[Dict]) -> List[Dict]:
+    """Combine SerpAPI + scraped results, deduplicate by URL, re-sort by quality."""
+    combined: List[Dict] = list(serp)
+    seen_urls = {r["url"] for r in serp}
+
+    for r in scraped:
+        if r.get("url") and r["url"] not in seen_urls:
+            seen_urls.add(r["url"])
+            combined.append(r)
+
+    combined.sort(key=lambda x: (x.get("quality", 0), len(x.get("snippet", ""))), reverse=True)
+    return combined[:MAX_SEARCH_RESULTS]
+
+
+def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, Any]]:
+    """
+    Run SerpAPI queries and direct scraper in parallel, then merge results.
+    Aims to collect 80–150 unique sources before sending to Claude.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        serp_future    = pool.submit(_search_serpapi, job, country, state, city)
+        scraper_future = pool.submit(run_scraper,     job, country, state, city)
+
+        serp_results    = serp_future.result(timeout=180)
+        scraper_results = scraper_future.result(timeout=40)
+
+    return _merge_sources(serp_results, scraper_results)
