@@ -18,9 +18,9 @@ import streamlit as st
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-MAX_SEARCH_RESULTS = 80          # cast a very wide net
-MAX_SOURCES_FOR_AI = 50          # send as many as possible to Claude
-MAX_DISPLAYED_SOURCES = 15
+MAX_SEARCH_RESULTS = 200         # cast a very wide net
+MAX_SOURCES_FOR_AI = 80          # send as many as possible to Claude
+MAX_DISPLAYED_SOURCES = 20
 HOURS_PER_YEAR = 2080
 SERPAPI_URL = "https://serpapi.com/search.json"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -396,22 +396,24 @@ def compute_stats(
     if stdev < 1:
         stdev = mean * 0.05  # assume 5% spread as minimum
 
-    def clamp_range(lo, hi):
-        return max(0, lo), max(0, hi)
-
     # Median
     if len(sorted_vals) % 2 == 0:
         median = (sorted_vals[len(sorted_vals) // 2 - 1] + sorted_vals[len(sorted_vals) // 2]) / 2
     else:
         median = sorted_vals[len(sorted_vals) // 2]
 
-    # Pre-compute sigma ranges and per-band counts
+    # Theoretical sigma bounds — NOT clamped to observed min/max
+    s1 = (mean - stdev,       mean + stdev)
+    s2 = (mean - 2 * stdev,   mean + 2 * stdev)
+    s3 = (mean - 3 * stdev,   mean + 3 * stdev)
+
+    # Display bounds — clamped to ≥0 only (never clamped to observed range)
+    def _disp(lo, hi):
+        return max(0.0, lo), max(0.0, hi)
+
+    # Point counts within each theoretical range
     def _count_in(lo, hi):
         return sum(1 for v in sorted_vals if lo <= v <= hi)
-
-    s1_lo, s1_hi = clamp_range(mean - stdev, mean + stdev)
-    s2_lo, s2_hi = clamp_range(mean - 2 * stdev, mean + 2 * stdev)
-    s3_lo, s3_hi = clamp_range(mean - 3 * stdev, mean + 3 * stdev)
 
     return {
         "mean": mean,
@@ -421,12 +423,18 @@ def compute_stats(
         "max": max(sorted_vals),
         "count": len(sorted_vals),
         "count_raw": len(values),
-        "sigma1": (s1_lo, s1_hi),
-        "sigma2": (s2_lo, s2_hi),
-        "sigma3": (s3_lo, s3_hi),
-        "sigma1_count": _count_in(s1_lo, s1_hi),
-        "sigma2_count": _count_in(s2_lo, s2_hi),
-        "sigma3_count": _count_in(s3_lo, s3_hi),
+        # Theoretical bounds (may extend below observed min — ensures bands always diverge)
+        "sigma1": s1,
+        "sigma2": s2,
+        "sigma3": s3,
+        # Display bounds (clamped to ≥0 only — used for UI rendering)
+        "sigma1_display": _disp(*s1),
+        "sigma2_display": _disp(*s2),
+        "sigma3_display": _disp(*s3),
+        # Point counts within each theoretical range
+        "sigma1_count": _count_in(*s1),
+        "sigma2_count": _count_in(*s2),
+        "sigma3_count": _count_in(*s3),
     }
 
 
