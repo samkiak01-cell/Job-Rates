@@ -117,14 +117,29 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
     return queries
 
 
-def _search_serpapi(job: str, country: str, state: str, city: str) -> List[Dict[str, Any]]:
+def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
     """
     Execute all SerpAPI queries and return deduplicated, quality-scored results.
     Collects up to MAX_SEARCH_RESULTS unique sources.
+    Enriches query list with plan["query_strategies"] and plan["target_sites"] when provided.
     """
     key = secret("SERPAPI_API_KEY")
     queries = build_queries(job, country, state, city)
     gl, hl = get_country_codes(country)
+
+    # ── Append planner query strategies ──
+    location = ", ".join(x for x in [city, state, country] if x) or country
+    for tmpl in (plan.get("query_strategies") or []):
+        try:
+            queries.append(tmpl.format(job=job, location=location))
+        except KeyError:
+            pass  # skip templates with unknown placeholders
+
+    # ── Append planner target sites not already in SALARY_SITES ──
+    existing_site_set = set(SALARY_SITES)
+    for site in (plan.get("target_sites") or []):
+        if site not in existing_site_set:
+            queries.append(f'site:{site} "{job}" salary')
 
     results: List[Dict] = []
     seen_urls: set = set()
@@ -198,13 +213,14 @@ def _merge_sources(serp: List[Dict], scraped: List[Dict]) -> List[Dict]:
     return combined[:MAX_SEARCH_RESULTS]
 
 
-def search_web(job: str, country: str, state: str, city: str) -> List[Dict[str, Any]]:
+def search_web(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
     """
     Run SerpAPI queries and direct scraper in parallel, then merge results.
     Aims to collect 80–150 unique sources before sending to Claude.
+    Accepts an optional SearchPlan dict from site_planner to enrich queries.
     """
     with ThreadPoolExecutor(max_workers=2) as pool:
-        serp_future    = pool.submit(_search_serpapi, job, country, state, city)
+        serp_future    = pool.submit(_search_serpapi, job, country, state, city, plan)
         scraper_future = pool.submit(run_scraper,     job, country, state, city)
 
         serp_results    = serp_future.result(timeout=180)
