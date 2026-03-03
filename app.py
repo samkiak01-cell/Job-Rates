@@ -1,6 +1,6 @@
 """
 Job Rate Finder — Powered by Claude AI
-myBasePay brand: clean white UI, Emerald/Wisteria/Marigold palette.
+Dark theme, myBasePay palette: Emerald / Wisteria / Marigold / Prussian.
 """
 
 from __future__ import annotations
@@ -36,239 +36,354 @@ st.set_page_config(page_title="Job Rate Finder", page_icon="💼", layout="cente
 
 
 # ─────────────────────────────────────────────
-# CSS — myBasePay palette
+# CSS  — dark myBasePay theme
 # ─────────────────────────────────────────────
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  --emerald:   #006633;
-  --prussian:  #121631;
-  --wisteria:  #7393f9;
-  --marigold:  #ffbf00;
-  --f-mint:    #e7fcdb;
-  --icy-blue:  #b7d4f7;
-  --alabaster: #e8e8e8;
-  --gray-50:   #f9fafb;
-  --gray-100:  #f3f4f6;
-  --gray-200:  #e5e7eb;
-  --gray-400:  #9ca3af;
-  --gray-500:  #6b7280;
-  --gray-700:  #374151;
+  /* surfaces */
+  --bg:    #060c18;
+  --s1:    #0d1729;
+  --s2:    #131f38;
+  --s3:    #1a2a4a;
+  /* borders */
+  --b0: rgba(115,147,249,.07);
+  --b1: rgba(115,147,249,.14);
+  --b2: rgba(115,147,249,.28);
+  --b3: rgba(115,147,249,.5);
+  /* text */
+  --tx:  #e2e9f8;
+  --tx2: #8fa6cc;
+  --mt:  #4a6080;
+  /* brand */
+  --emerald:    #00cc55;
+  --emerald-d:  rgba(0,204,85,.12);
+  --prussian:   #121631;
+  --wisteria:   #7393f9;
+  --wisteria-d: rgba(115,147,249,.12);
+  --marigold:   #ffbf00;
+  --marigold-d: rgba(255,191,0,.12);
+  /* fonts */
   --mono: 'JetBrains Mono', monospace;
   --sans: 'Inter', system-ui, sans-serif;
 }
 
-/* ── Global ── */
+/* ── Global ─────────────────────────────────── */
 html, body,
 [data-testid="stAppViewContainer"],
-[data-testid="stApp"] {
-  background: #ffffff !important;
-  color: var(--prussian) !important;
+[data-testid="stApp"],
+section[data-testid="stSidebar"] {
+  background: var(--bg) !important;
+  color: var(--tx) !important;
   font-family: var(--sans) !important;
-}
-.block-container {
-  padding-top: 0 !important;
-  padding-bottom: 4rem !important;
-  max-width: 900px !important;
 }
 [data-testid="stHeader"] { display: none !important; }
 #MainMenu, footer { visibility: hidden; }
-
-/* ── Input card ── */
-div[data-testid="stContainer"] {
-  background: #ffffff !important;
-  border: 1px solid var(--gray-200) !important;
-  border-radius: 16px !important;
-  padding: 24px 28px !important;
+.block-container {
+  padding-top: 0 !important;
+  padding-bottom: 5rem !important;
+  max-width: 920px !important;
 }
 
-/* ── Form labels ── */
+/* ── Expander ──────────────────────────────── */
+details summary {
+  color: var(--tx2) !important;
+  font-size: 13px !important;
+}
+.stExpander { border: 1px solid var(--b1) !important; border-radius: 12px !important; background: var(--s1) !important; }
+
+/* ── Input card ────────────────────────────── */
+div[data-testid="stContainer"] {
+  background: var(--s1) !important;
+  border: 1px solid var(--b1) !important;
+  border-radius: 18px !important;
+  padding: 28px 32px !important;
+  box-shadow: 0 8px 40px rgba(0,0,0,.4) !important;
+}
+
+/* ── Labels ─────────────────────────────────── */
 label,
 .stMarkdown p {
-  color: var(--gray-700) !important;
-  font-size: 13px !important;
-  font-weight: 500 !important;
+  color: var(--tx2) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
   font-family: var(--sans) !important;
 }
 
-/* ── Text inputs / textareas ── */
-.stTextInput input,
+/* ── Text inputs ────────────────────────────── */
+.stTextInput input {
+  background: var(--s2) !important;
+  border: 1px solid var(--b1) !important;
+  color: var(--tx) !important;
+  border-radius: 10px !important;
+  padding: 12px 16px !important;
+  font-size: 15px !important;
+  font-family: var(--sans) !important;
+  transition: border-color .18s, box-shadow .18s !important;
+}
+.stTextInput input::placeholder { color: var(--mt) !important; }
+.stTextInput input:focus {
+  border-color: var(--wisteria) !important;
+  box-shadow: 0 0 0 3px rgba(115,147,249,.18) !important;
+  background: var(--s3) !important;
+}
+
+/* ── Text area ──────────────────────────────── */
 .stTextArea textarea {
-  background: var(--gray-50) !important;
-  border: 1px solid var(--gray-200) !important;
-  color: var(--prussian) !important;
+  background: var(--s2) !important;
+  border: 1px solid var(--b1) !important;
+  color: var(--tx) !important;
   border-radius: 10px !important;
-  font-family: var(--sans) !important;
   font-size: 14px !important;
+  font-family: var(--sans) !important;
 }
-.stTextInput input:focus,
 .stTextArea textarea:focus {
-  border-color: var(--emerald) !important;
-  box-shadow: 0 0 0 3px rgba(0,102,51,.1) !important;
+  border-color: var(--wisteria) !important;
+  box-shadow: 0 0 0 3px rgba(115,147,249,.18) !important;
 }
 
-/* ── Selectboxes ── */
+/* ── Selectbox ──────────────────────────────── */
 .stSelectbox [data-baseweb="select"] > div {
-  background: var(--gray-50) !important;
-  border: 1px solid var(--gray-200) !important;
-  color: var(--prussian) !important;
+  background: var(--s2) !important;
+  border: 1px solid var(--b1) !important;
+  color: var(--tx) !important;
   border-radius: 10px !important;
   font-family: var(--sans) !important;
+  transition: border-color .18s !important;
 }
+.stSelectbox [data-baseweb="select"] > div:hover { border-color: var(--b2) !important; }
+.stSelectbox [data-baseweb="select"] > div:focus-within {
+  border-color: var(--wisteria) !important;
+  box-shadow: 0 0 0 3px rgba(115,147,249,.18) !important;
+}
+/* dropdown menu */
+[data-baseweb="popover"] ul,
+[data-baseweb="menu"] {
+  background: var(--s2) !important;
+  border: 1px solid var(--b2) !important;
+  border-radius: 10px !important;
+}
+[data-baseweb="menu"] li { color: var(--tx) !important; }
+[data-baseweb="menu"] li:hover { background: var(--s3) !important; }
 
-/* ── Marigold CTA button ── */
-.stButton button {
+/* ── Radio buttons ──────────────────────────── */
+.stRadio > div { gap: 12px !important; }
+.stRadio label { text-transform: none !important; letter-spacing: 0 !important; font-size: 13px !important; color: var(--tx2) !important; }
+.stRadio [data-testid="stMarkdownContainer"] p { text-transform: none !important; letter-spacing: 0 !important; }
+
+/* ── Marigold CTA ───────────────────────────── */
+.stButton > button {
   width: 100%;
-  border: none;
-  border-radius: 12px;
-  padding: 14px 20px;
-  font-weight: 700;
-  font-size: 15px;
-  color: #121631 !important;
-  background: #ffbf00 !important;
-  box-shadow: 0 4px 20px rgba(255,191,0,.35);
+  border: none !important;
+  border-radius: 12px !important;
+  padding: 15px 20px !important;
+  font-weight: 700 !important;
+  font-size: 15px !important;
+  color: #0d1729 !important;
+  background: var(--marigold) !important;
+  box-shadow: 0 4px 24px rgba(255,191,0,.3) !important;
   font-family: var(--sans) !important;
-  transition: all .15s ease;
+  letter-spacing: .02em !important;
+  transition: all .18s ease !important;
 }
-.stButton button:hover {
-  box-shadow: 0 8px 30px rgba(255,191,0,.5);
-  transform: translateY(-1px);
+.stButton > button:hover {
+  box-shadow: 0 8px 36px rgba(255,191,0,.45) !important;
+  transform: translateY(-1px) !important;
 }
-.stButton button:disabled { opacity: .45; box-shadow: none; transform: none; }
+.stButton > button:disabled { opacity: .4 !important; box-shadow: none !important; transform: none !important; }
 
-/* ── AI summary card ── */
+/* ── Section divider ────────────────────────── */
+.sec-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--mt);
+  margin: 28px 0 12px; display: flex; align-items: center; gap: 12px;
+}
+.sec-label::after { content: ''; flex: 1; height: 1px; background: var(--b0); }
+
+/* ── AI summary ─────────────────────────────── */
 .ai-card {
-  border-left: 3px solid;
-  border-image: linear-gradient(180deg,#006633,#7393f9) 1;
-  background: #f0fdf4;
-  border-radius: 0 14px 14px 0;
-  padding: 20px 24px;
+  position: relative; overflow: hidden;
+  background: var(--s1);
+  border: 1px solid var(--b1);
+  border-radius: 16px;
+  padding: 22px 26px;
   margin: 18px 0;
 }
+.ai-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--emerald), var(--wisteria));
+}
 .ai-badge {
-  font-size: 10px; font-weight: 700; letter-spacing: .14em;
-  text-transform: uppercase; color: var(--emerald); margin-bottom: 8px;
-  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: .15em;
+  text-transform: uppercase; color: var(--emerald); margin-bottom: 10px;
+  display: flex; align-items: center; gap: 7px;
 }
 .ai-badge::before {
-  content: ''; width: 5px; height: 5px; border-radius: 50%;
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: var(--emerald); display: inline-block;
+  box-shadow: 0 0 8px var(--emerald);
 }
-.ai-text { color: var(--prussian); font-size: 14px; line-height: 1.75; margin: 0; }
+.ai-text { color: var(--tx2); font-size: 14px; line-height: 1.8; margin: 0; }
 
-/* ── Confidence banner ── */
+/* ── Confidence banner ──────────────────────── */
 .conf-banner {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; margin: 8px 0 16px;
   padding: 10px 16px; border-radius: 10px; font-size: 13px;
-  border: 1px solid var(--gray-200); background: var(--gray-50);
-  color: var(--gray-700); margin: 6px 0 14px;
+  border: 1px solid var(--b0); background: rgba(255,255,255,.025);
+  color: var(--tx2);
 }
 .conf-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-/* ── Recommended range card ── */
+/* ── Range hero card ────────────────────────── */
 .range-card {
-  background: #ffffff;
-  border: 1px solid var(--gray-200);
-  border-radius: 16px;
-  padding: 28px 32px;
-  margin: 14px 0 22px;
   position: relative; overflow: hidden;
+  background: var(--s1);
+  border: 1px solid var(--b1);
+  border-radius: 18px;
+  padding: 30px 34px;
+  margin: 14px 0 24px;
 }
 .range-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0;
-  height: 3px; background: linear-gradient(90deg, #006633, #7393f9);
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--emerald), var(--wisteria));
 }
-.range-grid { display: flex; align-items: flex-end; gap: 24px; flex-wrap: wrap; }
-.range-lbl  { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--gray-500); margin-bottom: 6px; }
-.range-val  { font-family: var(--mono); font-size: 36px; font-weight: 700; letter-spacing: -.03em; line-height: 1; color: var(--prussian); }
-.range-unit { font-size: 12px; color: var(--gray-500); margin-top: 6px; }
-.range-sep  { font-size: 28px; color: var(--gray-300,#d1d5db); padding-bottom: 10px; }
+.range-glow {
+  position: absolute; top: -60px; left: -40px; width: 300px; height: 200px;
+  background: radial-gradient(ellipse, rgba(0,204,85,.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+.range-grid { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; }
+.range-lbl  { font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--mt); margin-bottom: 7px; }
+.range-val  { font-family: var(--mono); font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1; color: var(--tx); }
+.range-unit { font-size: 12px; color: var(--mt); margin-top: 7px; }
+.range-sep  { font-size: 26px; color: var(--b2); padding-bottom: 12px; }
 .range-mid  { margin-left: auto; text-align: center; }
-.range-mid-val { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--emerald); }
-.range-mid-lbl { font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--emerald); opacity: .7; margin-bottom: 4px; }
+.range-mid-val { font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--emerald); }
+.range-mid-lbl { font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--emerald); opacity: .7; margin-bottom: 6px; }
 
-/* ── Stats bar ── */
+/* ── Stats bar ──────────────────────────────── */
 .stats-bar {
-  display: flex; flex-wrap: wrap; gap: 4px 18px;
+  display: flex; flex-wrap: wrap; gap: 4px 20px;
   padding: 11px 18px; border-radius: 12px;
-  background: var(--gray-50); border: 1px solid var(--gray-200);
-  margin-bottom: 14px; font-size: 13px; color: var(--gray-700);
+  background: var(--s1); border: 1px solid var(--b0);
+  margin-bottom: 12px; font-size: 13px; color: var(--tx2);
 }
 
-/* ── Low-data warning ── */
+/* ── Low-data warning ───────────────────────── */
 .low-data-warn {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 16px; border-radius: 10px;
-  border: 1px solid rgba(217,119,6,.35);
-  background: rgba(255,191,0,.08);
-  font-size: 13px; color: #92400e; margin-bottom: 14px;
+  padding: 11px 16px; border-radius: 10px;
+  border: 1px solid rgba(255,191,0,.25);
+  background: rgba(255,191,0,.06);
+  font-size: 13px; color: #f5d060;
+  margin-bottom: 12px;
 }
 
-/* ── Band rows ── */
+/* ── Band rows ──────────────────────────────── */
 .bd-row {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 16px 20px;
-  border: 1px solid var(--gray-200); border-radius: 14px;
-  margin-bottom: 8px; background: #ffffff;
-  transition: border-color .15s, box-shadow .15s;
+  position: relative;
+  background: var(--s1);
+  border: 1px solid var(--b0);
+  border-radius: 14px;
+  padding: 16px 20px 14px 22px;
+  margin-bottom: 8px;
+  transition: border-color .2s, box-shadow .2s;
 }
-.bd-row:hover { border-color: var(--gray-400); box-shadow: 0 2px 8px rgba(0,0,0,.06); }
-.bd-tag {
-  font-size: 11px; font-weight: 700; letter-spacing: .06em;
-  text-transform: uppercase; padding: 4px 10px; border-radius: 8px;
-  white-space: nowrap; flex-shrink: 0; margin-top: 1px;
+.bd-row:hover {
+  border-color: var(--b2);
+  box-shadow: 0 4px 20px rgba(0,0,0,.25);
 }
-.bd-content { flex: 1; min-width: 0; }
-.bd-desc    { font-size: 12px; color: var(--gray-500); margin-bottom: 4px; }
-.bd-right   { text-align: right; flex-shrink: 0; }
-.bd-range   { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--prussian); white-space: nowrap; }
-.bd-avg     { font-family: var(--mono); font-size: 11px; color: var(--gray-500); margin-top: 3px; }
-.pts-badge  {
-  font-size: 10px; font-weight: 700; letter-spacing: .05em;
-  padding: 2px 8px; border-radius: 20px;
-  display: inline-block; margin-top: 5px; font-family: var(--mono);
+.bd-top {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 14px;
+  margin-bottom: 6px;
+}
+.bd-left  { display: flex; align-items: center; gap: 10px; }
+.bd-tag   {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; padding: 4px 10px;
+  border-radius: 7px; white-space: nowrap;
+}
+.bd-desc  { font-size: 12px; color: var(--mt); }
+.bd-right { text-align: right; flex-shrink: 0; }
+.bd-range { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--tx); white-space: nowrap; }
+.bd-avg   { font-family: var(--mono); font-size: 11px; color: var(--mt); margin-top: 3px; }
+.pts-badge {
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  padding: 2px 8px; border-radius: 20px; white-space: nowrap;
 }
 
-/* ── Source pills ── */
-.src-pills  { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-.src-pill   {
-  display: inline-block; padding: 3px 9px; border-radius: 20px; border: 1px solid;
-  font-size: 11px; font-family: var(--mono); text-decoration: none;
-  transition: opacity .12s; white-space: nowrap; background: transparent;
+/* ── Source pills ───────────────────────────── */
+.src-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.src-pill  {
+  display: inline-block; padding: 3px 10px; border-radius: 20px;
+  border: 1px solid; font-size: 11px; font-family: var(--mono);
+  text-decoration: none; white-space: nowrap;
+  transition: opacity .15s, transform .12s;
 }
-.src-pill:hover { opacity: .7; }
+.src-pill:hover { opacity: .75; transform: translateY(-1px); }
 
-/* ── Source list (expander) ── */
+/* ── Band left-accent bar ───────────────────── */
+.bd-row::before {
+  content: ''; position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 3px; border-radius: 3px;
+}
+
+/* ── Source expander list ───────────────────── */
 .src-item {
   display: flex; gap: 10px; align-items: flex-start;
-  padding: 10px 14px; border: 1px solid var(--gray-200);
-  border-radius: 10px; text-decoration: none; margin-bottom: 6px;
-  transition: all .15s; background: #ffffff;
+  padding: 10px 14px; border: 1px solid var(--b0);
+  border-radius: 10px; text-decoration: none;
+  margin-bottom: 6px; background: var(--s1);
+  transition: border-color .15s, background .15s;
 }
-.src-item:hover { border-color: var(--emerald); background: #f0fdf4; }
+.src-item:hover { border-color: var(--b2); background: var(--s2); }
 .src-dot   { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
-.src-title { color: var(--prussian); font-weight: 600; font-size: 13px; }
-.src-meta  { color: var(--gray-500); font-size: 11px; margin-top: 2px; }
+.src-title { color: var(--tx); font-weight: 600; font-size: 13px; }
+.src-meta  { color: var(--mt); font-size: 11px; margin-top: 2px; }
 
-.band-divider { height: 1px; background: var(--gray-100); margin: 4px 0 10px; }
+.band-divider { height: 1px; background: var(--b0); margin: 4px 0 10px; }
+.note-box {
+  padding: 14px 18px; border-radius: 12px; font-size: 13px;
+  border: 1px solid; margin-top: 12px; line-height: 1.6;
+}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# Header
+# Hero header
 # ─────────────────────────────────────────────
 st.markdown("""
-<div style="background:linear-gradient(135deg,#006633,#7393f9);padding:40px 32px;
-  border-radius:0 0 24px 24px;margin-bottom:28px;">
-  <div style="font-size:30px;font-weight:800;color:#fff;letter-spacing:-.02em;">
-    💼 Job Rate Finder
-  </div>
-  <div style="color:rgba(255,255,255,.82);font-size:14px;margin-top:6px;">
-    Salary intelligence powered by Claude AI
+<div style="
+  background: linear-gradient(135deg, #001a0e 0%, #0d1729 55%, #0b102e 100%);
+  padding: 48px 36px 40px;
+  border-radius: 0 0 28px 28px;
+  margin-bottom: 30px;
+  position: relative;
+  overflow: hidden;
+">
+  <!-- ambient glows -->
+  <div style="position:absolute;top:-60px;left:-40px;width:340px;height:260px;
+    background:radial-gradient(ellipse,rgba(0,204,85,.13) 0%,transparent 70%);pointer-events:none;"></div>
+  <div style="position:absolute;top:-40px;right:-20px;width:280px;height:220px;
+    background:radial-gradient(ellipse,rgba(115,147,249,.1) 0%,transparent 70%);pointer-events:none;"></div>
+  <!-- content -->
+  <div style="position:relative;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;
+      color:rgba(115,147,249,.7);margin-bottom:10px;">Salary Intelligence</div>
+    <div style="font-size:34px;font-weight:800;color:#e2e9f8;letter-spacing:-.03em;line-height:1.1;">
+      Job Rate Finder
+    </div>
+    <div style="color:rgba(226,233,248,.5);font-size:14px;margin-top:8px;font-weight:400;">
+      100+ sources &middot; analyzed by Claude AI &middot; live FX conversion
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -278,7 +393,6 @@ st.markdown("""
 # Helpers
 # ─────────────────────────────────────────────
 def compact_money(annual_usd: float, currency: str, rate_type: str) -> str:
-    """Compact format for source pills: 72k, 1.2M, 38/hr."""
     val = to_currency(annual_usd, currency)
     if rate_type == "hourly":
         return f"{val / HOURS_PER_YEAR:,.0f}/hr"
@@ -289,48 +403,65 @@ def compact_money(annual_usd: float, currency: str, rate_type: str) -> str:
     return f"{val:,.0f}"
 
 
-def render_source_pills(
+def render_band_sources(
     lo_usd: float,
     hi_usd: float,
+    mean_usd: float,
     currency: str,
     rate_type: str,
     data_points: List[Dict],
     accent_color: str,
-    max_pills: int = 5,
 ) -> str:
-    """Return HTML for source pills within [lo_usd, hi_usd]."""
-    hits = [dp for dp in data_points if dp.get("annual_usd") and lo_usd <= dp["annual_usd"] <= hi_usd]
-    hits.sort(key=lambda d: d.get("confidence", 0), reverse=True)
+    """
+    2–3 source pills per band:
+      • Source closest to the band low  (supports the min)
+      • Source closest to the band high (supports the max)
+      • Source closest to the mean      (supports the average) — only if distinct
+    """
+    hits = [
+        dp for dp in data_points
+        if dp.get("annual_usd") and lo_usd <= dp["annual_usd"] <= hi_usd
+    ]
     if not hits:
         return ""
+
+    src_lo  = min(hits, key=lambda d: abs(d["annual_usd"] - lo_usd))
+    src_hi  = min(hits, key=lambda d: abs(d["annual_usd"] - hi_usd))
+    src_avg = min(hits, key=lambda d: abs(d["annual_usd"] - mean_usd))
+
+    # Deduplicate by identity, then sort ascending by value
+    seen: set = set()
+    ordered: List[Dict] = []
+    for dp in [src_lo, src_avg, src_hi]:
+        if id(dp) not in seen:
+            ordered.append(dp)
+            seen.add(id(dp))
+    ordered.sort(key=lambda d: d["annual_usd"])
+
     pills = ""
-    for dp in hits[:max_pills]:
+    for dp in ordered:
         val  = compact_money(dp["annual_usd"], currency, rate_type)
-        host = html_mod.escape((dp.get("host") or "source")[:28])
+        host = html_mod.escape((dp.get("host") or "source")[:24])
         url  = html_mod.escape(dp.get("url", "#"), quote=True)
         pills += (
             f'<a class="src-pill" href="{url}" target="_blank" '
-            f'style="border-color:{accent_color};color:{accent_color};">'
-            f'{host} {currency} {val}</a>'
+            f'style="border-color:{accent_color}55;color:{accent_color};'
+            f'background:{accent_color}12;">'
+            f'{host}&nbsp;{currency}&nbsp;{val}</a>'
         )
     return f'<div class="src-pills">{pills}</div>' if pills else ""
 
 
-def pts_badge(n: int, band: str) -> str:
-    """Point count badge with colour from plan spec."""
-    if band == "ai":
-        # Marigold for AI band
-        color, bg = "#92400e", "rgba(255,191,0,.18)"
+def pts_badge(n: int, band_key: str) -> str:
+    if band_key == "ai":
+        c, bg = "#f5d060", "rgba(255,191,0,.18)"
     elif n >= 8:
-        color, bg = "#006633", "#e7fcdb"   # emerald
+        c, bg = "#00cc55", "rgba(0,204,85,.15)"
     elif n >= 3:
-        color, bg = "#4f46e5", "#eff6ff"   # wisteria
+        c, bg = "#7393f9", "rgba(115,147,249,.15)"
     else:
-        color, bg = "#92400e", "rgba(255,191,0,.18)"  # amber
-    return (
-        f'<span class="pts-badge" style="color:{color};background:{bg};">'
-        f'{n} pt{"s" if n != 1 else ""}</span>'
-    )
+        c, bg = "#f5d060", "rgba(255,191,0,.18)"
+    return f'<span class="pts-badge" style="color:{c};background:{bg};">{n}&thinsp;pts</span>'
 
 
 def render_band_row(
@@ -338,6 +469,7 @@ def render_band_row(
     desc: str,
     tag_color: str,
     tag_bg: str,
+    left_accent: str,
     lo_s: str,
     hi_s: str,
     avg_s: str,
@@ -349,69 +481,73 @@ def render_band_row(
 ) -> str:
     badge = pts_badge(n_points, band_key)
     return f"""
-<div class="bd-row">
-  <span class="bd-tag" style="color:{tag_color};background:{tag_bg};">{label}</span>
-  <div class="bd-content">
-    <div class="bd-desc">{desc}</div>
-    {pills_html}
+<div class="bd-row" style="border-left-color:{left_accent}33;">
+  <div style="position:absolute;left:0;top:8px;bottom:8px;width:3px;
+    border-radius:3px;background:{left_accent};opacity:.7;"></div>
+  <div class="bd-top">
+    <div class="bd-left">
+      <span class="bd-tag" style="color:{tag_color};background:{tag_bg};">{label}</span>
+      <span class="bd-desc">{desc}</span>
+    </div>
+    <div class="bd-right">
+      <div class="bd-range">{curr}&nbsp;{lo_s}&nbsp;&ndash;&nbsp;{hi_s}</div>
+      <div class="bd-avg">avg&nbsp;{curr}&nbsp;{avg_s}&nbsp;{unit}</div>
+      {badge}
+    </div>
   </div>
-  <div class="bd-right">
-    <div class="bd-range">{curr} {lo_s} &ndash; {hi_s}</div>
-    <div class="bd-avg">avg {curr} {avg_s} {unit}</div>
-    {badge}
-  </div>
+  {pills_html}
 </div>"""
 
 
-# Band style specs: (label, desc, tag_color, tag_bg, pill_accent)
+# Band style map: label, desc, tag_color, tag_bg, left_accent, pill_accent
 BAND_SPECS = {
     "ai": (
         "AI Recommended",
-        "Recommended offer range from Claude&rsquo;s data analysis",
-        "#92400e", "rgba(255,191,0,.15)", "#d97706",
+        "Claude&rsquo;s recommended offer range",
+        "#f5d060", "rgba(255,191,0,.14)", "#ffbf00", "#ffbf00",
     ),
     1: (
-        "1&sigma; Typical",
-        "Where most salaries fall &mdash; within 1 standard deviation (~68%)",
-        "#006633", "#e7fcdb", "#006633",
+        "1&sigma;&nbsp;Typical",
+        "~68% of salaries &mdash; 1 standard deviation",
+        "#00cc55", "rgba(0,204,85,.12)", "#00cc55", "#00cc55",
     ),
     2: (
-        "2&sigma; Extended",
-        "Above- and below-average roles &mdash; within 2&sigma; (~95%)",
-        "#4f46e5", "#eff6ff", "#4f46e5",
+        "2&sigma;&nbsp;Extended",
+        "~95% of salaries &mdash; 2 standard deviations",
+        "#7393f9", "rgba(115,147,249,.12)", "#7393f9", "#7393f9",
     ),
     3: (
-        "3&sigma; Full Spread",
-        "Nearly all reported salaries &mdash; within 3&sigma; (~99.7%)",
-        "#374151", "#f3f4f6", "#374151",
+        "3&sigma;&nbsp;Full Spread",
+        "~99.7% of salaries &mdash; 3 standard deviations",
+        "#8fa6cc", "rgba(143,166,204,.1)", "#4a6080", "#8fa6cc",
     ),
     "obs": (
-        "Observed Min / Max",
-        "Actual lowest and highest values after outlier removal",
-        "#6b7280", "#f9fafb", "#6b7280",
+        "Observed&nbsp;Min/Max",
+        "Actual lowest and highest after outlier removal",
+        "#4a6080", "rgba(74,96,128,.12)", "#2a3d5a", "#4a6080",
     ),
 }
 
 
 # ─────────────────────────────────────────────
-# Confidence helper
+# Confidence
 # ─────────────────────────────────────────────
 def compute_confidence(stats: Optional[Dict], n_sources: int) -> tuple:
     if stats is None:
-        return ("Low", "Very limited data — treat as a rough estimate.", "#d97706")
+        return ("Low", "Very limited data — treat as a rough estimate.", "#f5d060")
     n  = stats["count"]
     cv = stats["stdev"] / stats["mean"] if stats["mean"] > 0 else 1.0
     if n >= 10 and cv < 0.35 and n_sources >= 5:
-        return ("High", f"{n} data points from {n_sources} sources with consistent values.", "#006633")
+        return ("High", f"{n} data points from {n_sources} sources, consistent values.", "#00cc55")
     elif n >= 5 and cv < 0.5:
         return ("Moderate", f"{n} data points with some variation in reported salaries.", "#7393f9")
     else:
-        parts = [f"{n} data points."]
+        parts = [f"{n} data point{'s' if n != 1 else ''}."]
         if cv >= 0.5:
-            parts.append("Wide variation suggests mixed roles or seniority levels.")
+            parts.append("Wide variation — mixed roles or seniority levels.")
         if n < 5:
             parts.append("More data would improve accuracy.")
-        return ("Low", " ".join(parts), "#d97706")
+        return ("Low", " ".join(parts), "#f5d060")
 
 
 # ─────────────────────────────────────────────
@@ -477,30 +613,81 @@ for k, v in _DEFAULTS.items():
 
 
 def on_country_change():
-    st.session_state["state"] = ""
-    st.session_state["city"]  = ""
+    st.session_state["state"]    = ""
+    st.session_state["city"]     = ""
     st.session_state["currency"] = get_meta(st.session_state["country"]).get("currency", "USD")
-
 
 def on_state_change():
     st.session_state["city"] = ""
 
 
 # ─────────────────────────────────────────────
-# Input card
+# Input form
 # ─────────────────────────────────────────────
 with st.container(border=True):
-    c1, c2 = st.columns([2, 1])
+
+    # Row 1 — Job title + experience
+    c1, c2 = st.columns([3, 1])
     with c1:
-        st.text_input("Job Title *", key="job_title", placeholder="e.g. Video Editor, Senior Software Engineer")
+        st.text_input("Job Title", key="job_title",
+                      placeholder="e.g. Senior Software Engineer")
     with c2:
-        st.text_input("Years of Experience", key="exp_years", placeholder="e.g. 3–5 years")
+        st.text_input("Experience", key="exp_years",
+                      placeholder="e.g. 5 yrs")
 
-    with st.expander("Job Description (optional)"):
-        st.text_area("Paste key responsibilities for better accuracy", key="job_desc", height=100,
-                     label_visibility="collapsed")
+    # Row 2 — Location cascade
+    try:
+        countries = get_countries()
+    except Exception:
+        countries = []
 
-        uploaded = st.file_uploader("Or upload JD (.txt)", type=["txt"], accept_multiple_files=False)
+    lc1, lc2, lc3 = st.columns(3)
+    with lc1:
+        st.selectbox(
+            "Country", [""] + countries, key="country",
+            on_change=on_country_change,
+            format_func=lambda x: "— Select —" if not x else x,
+        )
+    with lc2:
+        states = get_states(st.session_state["country"]) if st.session_state["country"] else []
+        if st.session_state["state"] not in [""] + states:
+            st.session_state["state"] = ""
+        st.selectbox("State / Province", [""] + states, key="state",
+                     on_change=on_state_change,
+                     format_func=lambda x: "— Any —" if not x else x)
+    with lc3:
+        cities = get_cities(st.session_state["country"], st.session_state["state"]) if st.session_state["country"] else []
+        if st.session_state["city"] not in [""] + cities:
+            st.session_state["city"] = ""
+        st.selectbox("City", [""] + cities, key="city",
+                     format_func=lambda x: "— Any —" if not x else x)
+
+    # Row 3 — Settings
+    pc1, pc2 = st.columns([2, 1])
+    with pc1:
+        rate_choice = st.radio(
+            "Pay Type", ["Annual Salary", "Hourly Rate"],
+            horizontal=True, key="_rate_radio",
+        )
+        st.session_state["rate_type"] = "hourly" if "Hourly" in rate_choice else "salary"
+    with pc2:
+        fx = get_fx()
+        currencies = sorted(fx.keys()) if fx else ["USD"]
+        if st.session_state["currency"] not in currencies:
+            st.session_state["currency"] = "USD"
+        st.selectbox(
+            "Currency", currencies, key="currency",
+            index=currencies.index(st.session_state["currency"])
+            if st.session_state["currency"] in currencies else 0,
+        )
+
+    # Job description — collapsible
+    with st.expander("Job description (optional — improves accuracy)"):
+        st.text_area(
+            "Paste key responsibilities or a full JD",
+            key="job_desc", height=90, label_visibility="collapsed",
+        )
+        uploaded = st.file_uploader("Or upload .txt", type=["txt"])
         if uploaded:
             fkey = f"{uploaded.name}_{uploaded.size}"
             if st.session_state.get("_fkey") != fkey:
@@ -510,45 +697,10 @@ with st.container(border=True):
                 except Exception:
                     pass
 
-    try:
-        countries = get_countries()
-    except Exception:
-        countries = []
-
-    st.selectbox(
-        "Country *", [""] + countries, key="country",
-        on_change=on_country_change,
-        format_func=lambda x: "— Select country —" if not x else x,
-    )
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        states = get_states(st.session_state["country"]) if st.session_state["country"] else []
-        if st.session_state["state"] not in [""] + states:
-            st.session_state["state"] = ""
-        st.selectbox("State / Province", [""] + states, key="state",
-                     on_change=on_state_change, format_func=lambda x: "— Any —" if not x else x)
-    with col2:
-        cities = get_cities(st.session_state["country"], st.session_state["state"]) if st.session_state["country"] else []
-        if st.session_state["city"] not in [""] + cities:
-            st.session_state["city"] = ""
-        st.selectbox("City", [""] + cities, key="city",
-                     format_func=lambda x: "— Any —" if not x else x)
-    with col3:
-        rate_choice = st.radio("Pay Type", ["Annual Salary", "Hourly Rate"], horizontal=True)
-        st.session_state["rate_type"] = "hourly" if "Hourly" in rate_choice else "salary"
-
-    fx = get_fx()
-    currencies = sorted(fx.keys()) if fx else ["USD"]
-    if st.session_state["currency"] not in currencies:
-        st.session_state["currency"] = "USD"
-    st.selectbox(
-        "Display Currency", currencies, key="currency",
-        index=currencies.index(st.session_state["currency"]) if st.session_state["currency"] in currencies else 0,
-    )
-
+    # CTA
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     can_go = bool(st.session_state["job_title"].strip() and st.session_state["country"])
-    st.button("Analyze Salary", disabled=not can_go, key="go_btn")
+    st.button("◆  Analyze Salary", disabled=not can_go, key="go_btn")
 
 
 # ─────────────────────────────────────────────
@@ -557,7 +709,7 @@ with st.container(border=True):
 if st.session_state.get("go_btn"):
     st.session_state["error"]  = None
     st.session_state["result"] = None
-    with st.spinner("Searching salary databases & analyzing with Claude AI…"):
+    with st.spinner("Searching 100+ salary sources and analyzing with Claude AI…"):
         try:
             st.session_state["result"] = run_analysis(
                 job=st.session_state["job_title"].strip(),
@@ -589,56 +741,59 @@ dps    = res.get("data_points", [])
 unit   = display_unit(rt, curr)
 n_vals = len(res["annual_values"])
 n_src  = len(res.get("sources", []))
+mean_usd = stats["mean"] if stats else (res["ai_mid_usd"])
 
-# ── AI Summary ──
+
+# ── AI Summary ──────────────────────────────────────────────────
 if res.get("ai_summary"):
     st.markdown(f"""
 <div class="ai-card">
-  <div class="ai-badge">✦ Claude AI Analysis</div>
+  <div class="ai-badge">Claude AI Analysis</div>
   <p class="ai-text">{html_mod.escape(res['ai_summary'])}</p>
 </div>""", unsafe_allow_html=True)
 
-# ── Warnings ──
+# ── Warnings ────────────────────────────────────────────────────
 for w in res.get("warnings") or []:
     if w and w.strip():
         st.warning(w)
 
-# ── Confidence banner ──
+# ── Confidence ──────────────────────────────────────────────────
 conf_lbl, conf_desc, conf_color = compute_confidence(stats, n_src)
 st.markdown(f"""
 <div class="conf-banner">
   <div class="conf-dot" style="background:{conf_color};box-shadow:0 0 6px {conf_color};"></div>
-  <div><strong>{conf_lbl} confidence</strong> &middot; {html_mod.escape(conf_desc)}</div>
+  <div><strong style="color:{conf_color};">{conf_lbl} confidence</strong>
+    &nbsp;&middot;&nbsp;{html_mod.escape(conf_desc)}</div>
 </div>""", unsafe_allow_html=True)
 
-# ── Recommended Range hero card ──
+
+# ── Recommended Range hero ───────────────────────────────────────
 ai_min_s = display_money(res["ai_min_usd"], curr, rt)
 ai_max_s = display_money(res["ai_max_usd"], curr, rt)
 ai_mid_s = display_money(res["ai_mid_usd"], curr, rt)
-
-# Pills from the AI range
-ai_pills = render_source_pills(
-    res["ai_min_usd"], res["ai_max_usd"], curr, rt, dps,
-    accent_color="#d97706",
+ai_pills = render_band_sources(
+    res["ai_min_usd"], res["ai_max_usd"], res["ai_mid_usd"],
+    curr, rt, dps, "#ffbf00",
 )
 
 st.markdown(f"""
 <div class="range-card">
+  <div class="range-glow"></div>
   <div class="range-grid">
-    <div class="range-col">
+    <div>
       <div class="range-lbl">Low End</div>
       <div class="range-val">{ai_min_s}</div>
       <div class="range-unit">{unit}</div>
     </div>
     <div class="range-sep">&mdash;</div>
-    <div class="range-col">
+    <div>
       <div class="range-lbl">High End</div>
       <div class="range-val">{ai_max_s}</div>
       <div class="range-unit">{unit}</div>
     </div>
     <div class="range-mid">
       <div class="range-mid-lbl">Midpoint</div>
-      <div class="range-mid-val">{curr} {ai_mid_s}</div>
+      <div class="range-mid-val">{curr}&nbsp;{ai_mid_s}</div>
       <div class="range-unit">{unit}</div>
     </div>
   </div>
@@ -646,9 +801,9 @@ st.markdown(f"""
 </div>""", unsafe_allow_html=True)
 
 
-# ── Market Breakdown ──
+# ── Market Breakdown ─────────────────────────────────────────────
 if stats:
-    st.markdown('<div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#6b7280;margin:24px 0 12px;">Market Breakdown</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-label">Market Breakdown</div>', unsafe_allow_html=True)
 
     mean_s   = display_money(stats["mean"],   curr, rt)
     median_s = display_money(stats["median"], curr, rt)
@@ -658,78 +813,63 @@ if stats:
     outliers = stats["count_raw"] - count
 
     stat_parts = [
-        f"<strong>Average:</strong> {curr} {mean_s}",
-        f"<strong>Median:</strong> {curr} {median_s}",
-        f"<strong>{count} data point{'s' if count != 1 else ''}</strong>",
+        f"<strong>Average</strong>&nbsp;{curr}&nbsp;{mean_s}",
+        f"<strong>Median</strong>&nbsp;{curr}&nbsp;{median_s}",
+        f"<strong>{count}&nbsp;data&nbsp;point{'s' if count != 1 else ''}</strong>",
     ]
     if outliers > 0:
-        stat_parts.append(f"{outliers} outlier{'s' if outliers != 1 else ''} removed")
+        stat_parts.append(f"{outliers}&nbsp;outlier{'s' if outliers != 1 else ''}&nbsp;removed")
 
-    st.markdown(f"""
-<div class="stats-bar">{"&nbsp;&middot;&nbsp;".join(stat_parts)}</div>""",
+    st.markdown(
+        '<div class="stats-bar">' + "&nbsp;&middot;&nbsp;".join(stat_parts) + "</div>",
         unsafe_allow_html=True,
     )
 
-    # Low-data warning
     if count < 5:
         st.markdown(f"""
 <div class="low-data-warn">
-  &#9888;&nbsp; Only {count} data point{"s" if count != 1 else ""} found — ranges are estimates.
-  Broaden your search or remove location filters for more reliable results.
+  &#9888;&nbsp;Only {count} data point{"s" if count != 1 else ""} found —
+  ranges are estimates. Broaden your search for better accuracy.
 </div>""", unsafe_allow_html=True)
 
     rows_html = ""
 
-    # ── Band 0: AI Recommended ──
-    lbl, desc, tc, tbg, ac = BAND_SPECS["ai"]
+    # Band 0 — AI Recommended
+    lbl, desc, tc, tbg, la, ac = BAND_SPECS["ai"]
     ai_n = sum(1 for dp in dps if dp.get("annual_usd") and res["ai_min_usd"] <= dp["annual_usd"] <= res["ai_max_usd"])
-    ai_p = render_source_pills(res["ai_min_usd"], res["ai_max_usd"], curr, rt, dps, ac)
-    rows_html += render_band_row(
-        lbl, desc, tc, tbg,
-        ai_min_s, ai_max_s, ai_mid_s,
-        curr, unit, ai_p, ai_n, band_key="ai",
-    )
+    ai_p = render_band_sources(res["ai_min_usd"], res["ai_max_usd"], res["ai_mid_usd"], curr, rt, dps, ac)
+    rows_html += render_band_row(lbl, desc, tc, tbg, la, ai_min_s, ai_max_s, ai_mid_s, curr, unit, ai_p, ai_n, "ai")
     rows_html += '<div class="band-divider"></div>'
 
-    # ── Bands 1–3: sigma rows ──
+    # Bands 1–3 — sigma
     for sig in [1, 2, 3]:
-        lo_d, hi_d = stats[f"sigma{sig}_display"]
-        lbl, desc, tc, tbg, ac = BAND_SPECS[sig]
+        lo_d, hi_d  = stats[f"sigma{sig}_display"]
+        lbl, desc, tc, tbg, la, ac = BAND_SPECS[sig]
         lo_s  = display_money(lo_d, curr, rt)
         hi_s  = display_money(hi_d, curr, rt)
         avg_s = display_money(stats["mean"], curr, rt)
         sig_n = stats[f"sigma{sig}_count"]
-        pills = render_source_pills(lo_d, hi_d, curr, rt, dps, ac)
-        rows_html += render_band_row(
-            lbl, desc, tc, tbg,
-            lo_s, hi_s, avg_s,
-            curr, unit, pills, sig_n,
-        )
+        pills = render_band_sources(lo_d, hi_d, stats["mean"], curr, rt, dps, ac)
+        rows_html += render_band_row(lbl, desc, tc, tbg, la, lo_s, hi_s, avg_s, curr, unit, pills, sig_n)
 
     rows_html += '<div class="band-divider"></div>'
 
-    # ── Band 4: Observed Min/Max ──
-    lbl, desc, tc, tbg, ac = BAND_SPECS["obs"]
-    obs_pills = render_source_pills(stats["min"], stats["max"], curr, rt, dps, ac)
-    rows_html += render_band_row(
-        lbl, desc, tc, tbg,
-        min_s, max_s, mean_s,
-        curr, unit, obs_pills, count, band_key="obs",
-    )
+    # Band 4 — Observed Min/Max
+    lbl, desc, tc, tbg, la, ac = BAND_SPECS["obs"]
+    obs_p = render_band_sources(stats["min"], stats["max"], stats["mean"], curr, rt, dps, ac)
+    rows_html += render_band_row(lbl, desc, tc, tbg, la, min_s, max_s, mean_s, curr, unit, obs_p, count, "obs")
 
     st.markdown(rows_html, unsafe_allow_html=True)
 
 elif n_vals == 1:
     val_s = display_money(res["annual_values"][0], curr, rt)
     st.markdown(f"""
-<div style="padding:14px 18px;border-radius:12px;border:1px solid rgba(255,191,0,.4);
-  background:rgba(255,191,0,.08);font-size:13px;color:#92400e;margin-top:12px;">
-  Only 1 data point found ({curr} {val_s} {unit}).
-  Try a broader job title or remove location filters.
+<div class="note-box" style="color:#f5d060;border-color:rgba(255,191,0,.3);background:rgba(255,191,0,.06);">
+  Only 1 data point found ({curr} {val_s} {unit}). Try a broader job title or remove location filters.
 </div>""", unsafe_allow_html=True)
 
 
-# ── Sources expander ──
+# ── Sources expander ─────────────────────────────────────────────
 if res.get("sources"):
     with st.expander(f"View {len(res['sources'])} sources"):
         for s in res["sources"]:
@@ -737,10 +877,10 @@ if res.get("sources"):
             host  = html_mod.escape(pretty_host(s["url"]))
             url   = html_mod.escape(s["url"], quote=True)
             q     = s.get("quality", 50)
-            dot   = "#006633" if q >= 80 else "#7393f9" if q >= 60 else "#9ca3af"
+            dot   = "#00cc55" if q >= 80 else "#7393f9" if q >= 60 else "#4a6080"
             st.markdown(f"""
 <a class="src-item" href="{url}" target="_blank">
-  <div class="src-dot" style="background:{dot};"></div>
+  <div class="src-dot" style="background:{dot};box-shadow:0 0 4px {dot};"></div>
   <div>
     <div class="src-title">{title}</div>
     <div class="src-meta">{host}</div>
