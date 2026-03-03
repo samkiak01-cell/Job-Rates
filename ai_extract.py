@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from utils import (
     ANTHROPIC_URL,
@@ -119,6 +119,8 @@ def _build_user_prompt(
     rate_type: str,
     job_desc: str,
     sources: List[Dict],
+    period_hint: str = None,
+    market_notes: str = None,
 ) -> str:
     """Construct the full user prompt for Claude."""
 
@@ -144,9 +146,10 @@ def _build_user_prompt(
             f"{truncated}\n"
         )
 
-    # Monthly-pay country alert
+    # Monthly-pay country alert — period_hint from planner overrides default if present
+    effective_period = period_hint if period_hint in {"annual", "monthly"} else meta["default_period"]
     monthly_alert = ""
-    if meta["default_period"] == "monthly":
+    if effective_period == "monthly":
         currency = meta["currency"]
         fx = meta["fx"]
         monthly_alert = (
@@ -155,7 +158,12 @@ def _build_user_prompt(
             f"Example: {currency} 5,000/mo × 12 = {currency} 60,000/yr ÷ {fx} = ${60000/fx:,.0f} USD\n"
         )
 
-    return f"""Extract salary data for: **{job}** in **{location}**
+    # Market context block from Agent 1 planner
+    market_context_block = ""
+    if market_notes and market_notes.strip():
+        market_context_block = f"\nMARKET CONTEXT (from search planner):\n{market_notes.strip()}\n"
+
+    return f"""Extract salary data for: **{job}** in **{location}**{market_context_block}
 {exclusion_note}{exp_section}{jd_section}
 COUNTRY DEFAULTS:
 - Local currency: {meta['currency']}
@@ -197,11 +205,18 @@ STEP 4 — RECOMMEND a realistic range:
   - The min/max should represent a realistic offer range, NOT statistical extremes
   - The midpoint should be what a typical candidate would expect
 
+STEP 5 — RANGES in data_points:
+  - If a source gives a salary RANGE (e.g. '$60k–$90k'), put the midpoint in value_annual_usd,
+    the low end (converted to annual USD) in value_min_annual_usd, and the high end in value_max_annual_usd.
+  - If a source gives a SINGLE value, set both value_min_annual_usd and value_max_annual_usd to null.
+
 Return ONLY this JSON structure:
 {{
   "data_points": [
     {{
       "value_annual_usd": <number>,
+      "value_min_annual_usd": <number or null>,
+      "value_max_annual_usd": <number or null>,
       "source_idx": <1-based source number>,
       "label": "<brief: level, location, data type e.g. 'Senior, base salary, Glassdoor'>",
       "confidence": <0.3 to 1.0>,
@@ -230,6 +245,8 @@ def claude_extract(
     rate_type: str,
     job_desc: str,
     sources: List[Dict],
+    period_hint: str = None,
+    market_notes: str = None,
 ) -> Dict[str, Any]:
     """
     Send search snippets to Claude for structured salary extraction.
@@ -246,6 +263,8 @@ def claude_extract(
         rate_type=rate_type,
         job_desc=job_desc,
         sources=sources,
+        period_hint=period_hint,
+        market_notes=market_notes,
     )
 
     resp = http_post(
@@ -293,35 +312,47 @@ def claude_extract(
 # ─────────────────────────────────────────────
 # Post-processing
 # ─────────────────────────────────────────────
+def _guard_usd(v: Any) -> Optional[float]:
+    """Parse and validate a USD value: must be between $3k and $5M."""
+    n = parse_num(v)
+    if n is None or n < 3_000 or n > 5_000_000:
+        return None
+    return n
+
+
 def process_extraction(
     ai_data: Dict[str, Any],
     sources: List[Dict],
-) -> tuple[List[float], List[Dict]]:
+) -> List[Dict]:
     """
-    Process Claude extraction output into clean data points.
-    Returns (annual_values, data_points_with_source_info).
+    Process Claude extraction output into a data_table (List[Dict]).
+    Each row contains annual_usd (midpoint), optional value_min_usd / value_max_usd,
+    plus source metadata.
     """
     raw_points = ai_data.get("data_points") or []
-    annual_values: List[float] = []
-    enriched_points: List[Dict] = []
+    data_table: List[Dict] = []
 
     for dp in raw_points:
-        v = parse_num(dp.get("value_annual_usd"))
-        if not v or v < 3_000:
-            # Skip anything below $3k/year — likely a parsing error
-            continue
-        if v > 5_000_000:
-            # Skip anything above $5M/year — likely a parsing error
+        v = _guard_usd(dp.get("value_annual_usd"))
+        if v is None:
             continue
 
-        annual_values.append(v)
+        # Parse optional range endpoints
+        v_min = _guard_usd(dp.get("value_min_annual_usd"))
+        v_max = _guard_usd(dp.get("value_max_annual_usd"))
+
+        # Swap if inverted
+        if v_min is not None and v_max is not None and v_min > v_max:
+            v_min, v_max = v_max, v_min
 
         # Link back to source
         src_idx = int(dp.get("source_idx", 1)) - 1
         src = sources[src_idx] if 0 <= src_idx < len(sources) else {}
 
-        enriched_points.append({
+        data_table.append({
             "annual_usd": v,
+            "value_min_usd": v_min,
+            "value_max_usd": v_max,
             "label": dp.get("label", ""),
             "confidence": float(dp.get("confidence", 0.7)),
             "original_value": dp.get("original_value", ""),
@@ -331,4 +362,4 @@ def process_extraction(
             "quality": src.get("quality", 50),
         })
 
-    return annual_values, enriched_points
+    return data_table
