@@ -337,24 +337,32 @@ def display_unit(rate_type: str, currency: str) -> str:
 # Statistics
 # ─────────────────────────────────────────────
 def compute_stats(
-    values: List[float],
+    data_table: List[Dict],
     ai_min: Optional[float] = None,
     ai_max: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Compute mean, stdev, and sigma ranges from annual USD values.
+    Compute empirical percentile sigma ranges from a data_table (List[Dict]).
 
-    Two-pass outlier removal:
+    Each row must have an "annual_usd" key. Two-pass outlier removal:
       1. Standard IQR (1.5×) to remove extreme statistical outliers.
       2. AI-range sanity check: if Claude gave a recommended range, also remove
          points that are > 3× the AI max or < 1/4 the AI min — these are almost
          certainly wrong-country or wrong-job data that slipped through.
 
+    Sigma boundaries are actual list values (percentile-indexed), not stdev-derived.
     Returns None if fewer than 2 values survive filtering.
     """
+    values = [
+        float(row["annual_usd"])
+        for row in data_table
+        if isinstance(row.get("annual_usd"), (int, float)) and row["annual_usd"] > 0
+    ]
+
     if len(values) < 2:
         return None
 
+    count_raw = len(values)
     sorted_vals = sorted(values)
     n = len(sorted_vals)
 
@@ -385,56 +393,42 @@ def compute_stats(
     if len(sorted_vals) < 2:
         return None
 
+    n = len(sorted_vals)
     mean = statistics.mean(sorted_vals)
 
-    if len(sorted_vals) >= 3:
-        stdev = statistics.stdev(sorted_vals)
-    else:
-        stdev = abs(sorted_vals[-1] - sorted_vals[0]) / 2
-
-    # Prevent stdev from being 0 (all identical values)
-    if stdev < 1:
-        stdev = mean * 0.05  # assume 5% spread as minimum
-
     # Median
-    if len(sorted_vals) % 2 == 0:
-        median = (sorted_vals[len(sorted_vals) // 2 - 1] + sorted_vals[len(sorted_vals) // 2]) / 2
+    if n % 2 == 0:
+        median = (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
     else:
-        median = sorted_vals[len(sorted_vals) // 2]
+        median = sorted_vals[n // 2]
 
-    # Theoretical sigma bounds — NOT clamped to observed min/max
-    s1 = (mean - stdev,       mean + stdev)
-    s2 = (mean - 2 * stdev,   mean + 2 * stdev)
-    s3 = (mean - 3 * stdev,   mean + 3 * stdev)
+    # ── Empirical percentile sigma bands ──
+    # Boundaries are actual observed values, not computed from stdev.
+    sigma1_lo = sorted_vals[int(0.16 * n)]
+    sigma1_hi = sorted_vals[min(n - 1, int(0.84 * n))]   # central ~68%
 
-    # Display bounds — clamped to ≥0 only (never clamped to observed range)
-    def _disp(lo, hi):
-        return max(0.0, lo), max(0.0, hi)
+    sigma2_lo = sorted_vals[max(0, int(0.025 * n))]
+    sigma2_hi = sorted_vals[min(n - 1, int(0.975 * n))]  # central ~95%
 
-    # Point counts within each theoretical range
+    sigma3_lo = sorted_vals[0]
+    sigma3_hi = sorted_vals[-1]                            # full range post-outlier
+
     def _count_in(lo, hi):
         return sum(1 for v in sorted_vals if lo <= v <= hi)
 
     return {
         "mean": mean,
         "median": median,
-        "stdev": stdev,
-        "min": min(sorted_vals),
-        "max": max(sorted_vals),
-        "count": len(sorted_vals),
-        "count_raw": len(values),
-        # Theoretical bounds (may extend below observed min — ensures bands always diverge)
-        "sigma1": s1,
-        "sigma2": s2,
-        "sigma3": s3,
-        # Display bounds (clamped to ≥0 only — used for UI rendering)
-        "sigma1_display": _disp(*s1),
-        "sigma2_display": _disp(*s2),
-        "sigma3_display": _disp(*s3),
-        # Point counts within each theoretical range
-        "sigma1_count": _count_in(*s1),
-        "sigma2_count": _count_in(*s2),
-        "sigma3_count": _count_in(*s3),
+        "min": sorted_vals[0],
+        "max": sorted_vals[-1],
+        "count": n,
+        "count_raw": count_raw,
+        "sigma1": (sigma1_lo, sigma1_hi),
+        "sigma2": (sigma2_lo, sigma2_hi),
+        "sigma3": (sigma3_lo, sigma3_hi),
+        "sigma1_count": _count_in(sigma1_lo, sigma1_hi),
+        "sigma2_count": _count_in(sigma2_lo, sigma2_hi),
+        "sigma3_count": _count_in(sigma3_lo, sigma3_hi),
     }
 
 
