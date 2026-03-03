@@ -18,9 +18,9 @@ import streamlit as st
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-MAX_SEARCH_RESULTS = 50          # cast a wide net
-MAX_SOURCES_FOR_AI = 30          # send plenty to Claude
-MAX_DISPLAYED_SOURCES = 12
+MAX_SEARCH_RESULTS = 80          # cast a very wide net
+MAX_SOURCES_FOR_AI = 50          # send as many as possible to Claude
+MAX_DISPLAYED_SOURCES = 15
 HOURS_PER_YEAR = 2080
 SERPAPI_URL = "https://serpapi.com/search.json"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -64,6 +64,13 @@ GOOD_HOSTS = {
     "monster", "comparably", "bls.gov", "totaljobs", "reed",
     "talent.com", "careerbliss", "jobted", "adzuna", "hays",
     "roberthalf", "michaelpage", "randstad", "hired", "wellfound",
+    # International salary sites
+    "naukri", "ambitionbox", "stepstone", "gehalt", "cadremploi", "infojobs",
+    "catho", "vagas", "salario", "occ", "computrabajo", "doda", "openwork",
+    "saramin", "jobkorea", "wanted", "zhaopin", "51job", "lagou", "jobstreet",
+    "kalibrr", "mycareersfuture", "seek", "nationalevacaturebank", "pracuj",
+    "wynagrodzenia", "bayt", "naukrigulf", "pnet", "careers24", "lohncheck",
+    "irishjobs", "drushim",
 }
 
 BAD_HOSTS = {
@@ -130,9 +137,77 @@ COUNTRY_META = {
     "Israel":         {"currency": "ILS", "fx": 3.65,  "default_period": "annual"},
 }
 
+# Maps country names to SerpAPI geo params (gl, hl)
+COUNTRY_CODES: Dict[str, tuple] = {
+    "United States":  ("us", "en"), "United Kingdom": ("gb", "en"), "Canada":       ("ca", "en"),
+    "Australia":      ("au", "en"), "Germany":        ("de", "de"), "France":       ("fr", "fr"),
+    "Spain":          ("es", "es"), "Italy":          ("it", "it"), "Brazil":       ("br", "pt"),
+    "Mexico":         ("mx", "es"), "India":          ("in", "en"), "Japan":        ("jp", "ja"),
+    "Philippines":    ("ph", "en"), "Singapore":      ("sg", "en"), "Netherlands":  ("nl", "nl"),
+    "Sweden":         ("se", "sv"), "Switzerland":    ("ch", "de"), "Ireland":      ("ie", "en"),
+    "New Zealand":    ("nz", "en"), "South Korea":    ("kr", "ko"), "China":        ("cn", "zh"),
+    "UAE":            ("ae", "ar"), "Saudi Arabia":   ("sa", "ar"), "South Africa": ("za", "en"),
+    "Poland":         ("pl", "pl"), "Israel":         ("il", "he"),
+}
+
+
+def get_country_codes(country: str) -> tuple:
+    return COUNTRY_CODES.get(country, ("", "en"))
+
+
+# Per-country local salary databases
+COUNTRY_SALARY_SITES: Dict[str, List[str]] = {
+    "Brazil":         ["catho.com.br", "vagas.com.br", "glassdoor.com.br", "salario.com.br", "infojobs.com.br"],
+    "Mexico":         ["occ.com.mx", "computrabajo.com.mx", "glassdoor.com.mx", "indeed.com.mx"],
+    "India":          ["naukri.com", "glassdoor.co.in", "ambitionbox.com", "shine.com"],
+    "Germany":        ["stepstone.de", "gehalt.de", "glassdoor.de", "xing.com"],
+    "France":         ["cadremploi.fr", "glassdoor.fr", "indeed.fr", "monster.fr"],
+    "Spain":          ["infojobs.net", "glassdoor.es", "indeed.es"],
+    "Italy":          ["glassdoor.it", "indeed.it", "monster.it"],
+    "Japan":          ["doda.jp", "glassdoor.jp", "indeed.co.jp", "openwork.jp"],
+    "South Korea":    ["saramin.co.kr", "jobkorea.co.kr", "wanted.co.kr"],
+    "China":          ["zhaopin.com", "51job.com", "lagou.com"],
+    "Philippines":    ["jobstreet.com.ph", "kalibrr.com", "indeed.com.ph"],
+    "Singapore":      ["jobstreet.com.sg", "glassdoor.sg", "mycareersfuture.gov.sg"],
+    "Australia":      ["seek.com.au", "glassdoor.com.au", "indeed.com.au"],
+    "United Kingdom": ["totaljobs.com", "reed.co.uk", "glassdoor.co.uk", "adzuna.co.uk"],
+    "Canada":         ["glassdoor.ca", "indeed.ca", "jobbank.gc.ca"],
+    "Netherlands":    ["glassdoor.nl", "indeed.nl", "nationalevacaturebank.nl"],
+    "Sweden":         ["glassdoor.se", "indeed.se", "monster.se"],
+    "Poland":         ["pracuj.pl", "glassdoor.pl", "wynagrodzenia.pl"],
+    "UAE":            ["bayt.com", "glassdoor.ae", "naukrigulf.com"],
+    "Saudi Arabia":   ["bayt.com", "naukrigulf.com", "indeed.com.sa"],
+    "South Africa":   ["pnet.co.za", "glassdoor.co.za", "careers24.com"],
+    "Switzerland":    ["jobs.ch", "glassdoor.ch", "lohncheck.ch"],
+    "Ireland":        ["irishjobs.ie", "glassdoor.ie", "indeed.ie"],
+    "New Zealand":    ["seek.co.nz", "glassdoor.co.nz", "indeed.co.nz"],
+    "Israel":         ["glassdoor.com", "indeed.co.il", "drushim.co.il"],
+}
+
+# Local-language search templates for Latin-script countries
+COUNTRY_LOCAL_QUERIES: Dict[str, List[str]] = {
+    "Brazil":      ["{job} salário mensal Brasil", "{job} remuneração média Brasil"],
+    "Mexico":      ["{job} sueldo Mexico", "cuanto gana {job} Mexico"],
+    "Germany":     ["{job} Gehalt Deutschland", "{job} Vergütung Deutschland"],
+    "France":      ["{job} salaire France"],
+    "Spain":       ["{job} sueldo España"],
+    "Italy":       ["{job} stipendio Italia"],
+    "Netherlands": ["{job} salaris Nederland"],
+    "Sweden":      ["{job} lön Sverige"],
+    "Poland":      ["{job} wynagrodzenie Polska"],
+}
+
 
 def get_meta(country: str) -> Dict[str, Any]:
-    return COUNTRY_META.get(country, {"currency": "USD", "fx": 1.0, "default_period": "annual"})
+    base = dict(COUNTRY_META.get(country, {"currency": "USD", "fx": 1.0, "default_period": "annual"}))
+    currency = base["currency"]
+    if currency == "USD":
+        return base
+    live_rates = get_fx()
+    # Only override if we got real multi-currency data (not the {"USD":1.0} fallback)
+    if len(live_rates) > 1 and currency in live_rates:
+        base["fx"] = live_rates[currency]
+    return base
 
 
 # ─────────────────────────────────────────────
@@ -244,12 +319,6 @@ def parse_num(x: Any) -> Optional[float]:
     return n if math.isfinite(n) and n > 0 else None
 
 
-def fmt_money(n: float, currency: str = "USD", rate_type: str = "salary") -> str:
-    if rate_type == "hourly":
-        return f"{currency} {n:,.2f}/hr"
-    return f"{currency} {int(round(n)):,}/yr"
-
-
 # ─────────────────────────────────────────────
 # Display helpers
 # ─────────────────────────────────────────────
@@ -336,6 +405,14 @@ def compute_stats(
     else:
         median = sorted_vals[len(sorted_vals) // 2]
 
+    # Pre-compute sigma ranges and per-band counts
+    def _count_in(lo, hi):
+        return sum(1 for v in sorted_vals if lo <= v <= hi)
+
+    s1_lo, s1_hi = clamp_range(mean - stdev, mean + stdev)
+    s2_lo, s2_hi = clamp_range(mean - 2 * stdev, mean + 2 * stdev)
+    s3_lo, s3_hi = clamp_range(mean - 3 * stdev, mean + 3 * stdev)
+
     return {
         "mean": mean,
         "median": median,
@@ -344,9 +421,12 @@ def compute_stats(
         "max": max(sorted_vals),
         "count": len(sorted_vals),
         "count_raw": len(values),
-        "sigma1": clamp_range(mean - stdev, mean + stdev),
-        "sigma2": clamp_range(mean - 2 * stdev, mean + 2 * stdev),
-        "sigma3": clamp_range(mean - 3 * stdev, mean + 3 * stdev),
+        "sigma1": (s1_lo, s1_hi),
+        "sigma2": (s2_lo, s2_hi),
+        "sigma3": (s3_lo, s3_hi),
+        "sigma1_count": _count_in(s1_lo, s1_hi),
+        "sigma2_count": _count_in(s2_lo, s2_hi),
+        "sigma3_count": _count_in(s3_lo, s3_hi),
     }
 
 
