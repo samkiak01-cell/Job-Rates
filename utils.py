@@ -20,7 +20,7 @@ import streamlit as st
 # ─────────────────────────────────────────────
 MAX_SEARCH_RESULTS = 200         # cast a very wide net
 MAX_SOURCES_FOR_AI = 80          # send as many as possible to Claude
-MAX_DISPLAYED_SOURCES = 20
+MAX_DISPLAYED_SOURCES = 50
 HOURS_PER_YEAR = 2080
 SERPAPI_URL = "https://serpapi.com/search.json"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -396,11 +396,7 @@ def compute_stats(
     n = len(sorted_vals)
     mean = statistics.mean(sorted_vals)
 
-    # Median
-    if n % 2 == 0:
-        median = (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
-    else:
-        median = sorted_vals[n // 2]
+    median = statistics.median(sorted_vals)
 
     # ── Empirical percentile sigma bands ──
     # Boundaries are actual observed values, not computed from stdev.
@@ -432,33 +428,3 @@ def compute_stats(
     }
 
 
-def find_evidence_for_range(lo: float, hi: float, data_points: List[Dict], max_evidence: int = 3) -> List[Dict]:
-    """
-    Return up to `max_evidence` data points within [lo, hi].
-    Deduplicates by source host so you don't see the same site 3 times.
-    """
-    hits = [dp for dp in data_points if dp.get("annual_usd") and lo <= dp["annual_usd"] <= hi]
-    # Sort by confidence descending, then by source quality
-    hits.sort(key=lambda d: (d.get("confidence", 0), d.get("quality", 0)), reverse=True)
-
-    # Deduplicate by host — prefer highest-confidence entry per host
-    seen_hosts: set = set()
-    deduped: List[Dict] = []
-    for dp in hits:
-        h = dp.get("host", "")
-        if h and h in seen_hosts:
-            continue
-        seen_hosts.add(h)
-        deduped.append(dp)
-        if len(deduped) >= max_evidence:
-            break
-
-    # If dedup was too aggressive and we have fewer than max, backfill
-    if len(deduped) < max_evidence:
-        for dp in hits:
-            if dp not in deduped:
-                deduped.append(dp)
-                if len(deduped) >= max_evidence:
-                    break
-
-    return deduped[:max_evidence]
