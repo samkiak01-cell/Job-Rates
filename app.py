@@ -890,6 +890,41 @@ elif n_vals == 1:
 </div>""", unsafe_allow_html=True)
 
 
+# ── Debug sidebar ────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 🔍 Debug: Data Table")
+    st.caption(f"{len(dps)} rows after outlier filter")
+    if dps:
+        import pandas as pd
+        debug_rows = []
+        for i, dp in enumerate(dps):
+            debug_rows.append({
+                "#": i + 1,
+                "host": dp.get("host", ""),
+                "annual_usd": dp.get("annual_usd"),
+                "val_min_usd": dp.get("value_min_usd"),
+                "val_max_usd": dp.get("value_max_usd"),
+                "original": dp.get("original_value", ""),
+                "label": dp.get("label", ""),
+                "conf": dp.get("confidence", ""),
+                "note": dp.get("conversion_note", ""),
+                "url": dp.get("url", ""),
+            })
+        df = pd.DataFrame(debug_rows)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            height=600,
+            column_config={
+                "url": st.column_config.LinkColumn("url", display_text="link"),
+                "annual_usd": st.column_config.NumberColumn("annual_usd", format="$%.0f"),
+                "val_min_usd": st.column_config.NumberColumn("val_min", format="$%.0f"),
+                "val_max_usd": st.column_config.NumberColumn("val_max", format="$%.0f"),
+            },
+        )
+    else:
+        st.info("No data points.")
+
 # ── Sources expander ─────────────────────────────────────────────
 if res.get("sources"):
     with st.expander(f"View {len(res['sources'])} sources"):
