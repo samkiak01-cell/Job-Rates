@@ -1,220 +1,224 @@
 """
-scraper.py — Direct salary page scraper for Job Rate Finder
-Supplements SerpAPI by visiting salary sites directly and extracting snippets.
-Returns results in the same shape as SerpAPI results so they feed the same pipeline.
+search.py -- Web search strategy for Job Rate Finder
+Runs SerpAPI queries and direct scraping in parallel for maximum source coverage.
 """
 
 from __future__ import annotations
 
-import json
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote_plus
+import datetime
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List
 
-from utils import get_country_codes, host_of, source_quality
+from utils import (
+    COUNTRY_LOCAL_QUERIES,
+    COUNTRY_SALARY_SITES,
+    MAX_SEARCH_RESULTS,
+    SERPAPI_URL,
+    get_country_codes,
+    host_of,
+    http_get,
+    is_blocked,
+    secret,
+    source_quality,
+)
+from scraper import run_scraper
 
-# Browser-like headers to reduce bot detection
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-}
+_CURRENT_YEAR = datetime.date.today().year
 
-# Regex patterns to find salary figures in page text
-_SALARY_PATTERNS = [
-    # "$72,000" or "$72k" or "USD 72,000"
-    r"\$\s?[\d,]+(?:\.\d+)?(?:\s?[Kk])?",
-    r"USD\s?[\d,]+(?:\.\d+)?(?:\s?[Kk])?",
-    # "72,000 USD" or "72K USD"
-    r"[\d,]+(?:\.\d+)?(?:\s?[Kk])?\s?USD",
-    # Local currency with numbers: "R$ 5,000" "€ 45,000" "£ 38,000"
-    r"(?:R\$|€|£|¥|₹|S\$|A\$|C\$)\s?[\d,]+(?:\.\d+)?(?:\s?[Kk])?",
-    # "5,000 per month" "45,000 per year" (context gives us the figure)
-    r"[\d,]+(?:\.\d+)?\s?(?:per|/)\s?(?:month|year|yr|mo|hr|hour)",
+
+# Salary-specific sites to query individually
+SALARY_SITES = [
+    "glassdoor.com",
+    "indeed.com",
+    "payscale.com",
+    "salary.com",
+    "levels.fyi",
+    "ziprecruiter.com",
+    "builtin.com",
+    "comparably.com",
+    "talent.com",
+    "simplyhired.com",
+    "careerbliss.com",
+    "salaryexpert.com",
 ]
 
-_SALARY_RE = re.compile("|".join(_SALARY_PATTERNS), re.IGNORECASE)
 
+def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
+    """
+    Build an aggressive set of search queries to maximize unique sources.
 
-def _job_slug(job: str) -> str:
-    """'Software Engineer' → 'software-engineer'"""
-    return re.sub(r"\s+", "-", job.strip().lower())
+    Strategy:
+    - 12 generic queries with varying keywords
+    - 12 site-specific queries hitting every major salary database
+    - Country-specific local salary site queries
+    - Local-language templates
+    - 5 alternate phrasing queries
+    """
+    core_job = job.split("|")[0].strip() if "|" in job else job.strip()
+    loc_full   = ", ".join(x for x in [city, state, country] if x)
+    loc_region = ", ".join(x for x in [state, country] if x) or country
 
+    queries = []
 
-def _job_slug_title(job: str) -> str:
-    """'Software Engineer' → 'Software-Engineer'"""
-    return "-".join(w.capitalize() for w in job.strip().split())
-
-
-def _build_scraper_urls(job: str, country: str, state: str, city: str) -> List[Tuple[str, str]]:
-    """Return list of (url, host_label) tuples to scrape."""
-    slug    = _job_slug(job)
-    slug2   = _job_slug_title(job)
-    enc     = quote_plus(job)
-    c2      = get_country_codes(country)[0].upper() or "US"
-    c_lower = country.lower().replace(" ", "-")
-
-    loc_parts = [p for p in [city, state, country] if p]
-    loc_enc   = quote_plus(", ".join(loc_parts)) if loc_parts else quote_plus(country)
-    city_slug = _job_slug(city) if city else _job_slug(country)
-
-    targets: List[Tuple[str, str]] = [
-        (f"https://www.talent.com/salary?job={enc}&location={loc_enc}", "talent.com"),
-        (f"https://www.salaryexpert.com/salary/{city_slug}/{slug}", "salaryexpert.com"),
-        (f"https://www.ziprecruiter.com/Salaries/{slug2}-Salary", "ziprecruiter.com"),
-        (f"https://www.careerbliss.com/facts-and-figures/careerbliss-salary-information/{slug}/", "careerbliss.com"),
-        (f"https://www.simplyhired.com/{slug}-salaries", "simplyhired.com"),
-        (f"https://www.comparably.com/salaries/{slug}-salary", "comparably.com"),
-        (f"https://www.payscale.com/research/{c2}/Job={slug2}/Salary", "payscale.com"),
-        (f"https://jobted.com/{c_lower}/jobs/{slug}/salary", "jobted.com"),
+    # -- Broad queries (no site restriction) --
+    queries += [
+        f'"{core_job}" salary {country}',
+        f'"{core_job}" average salary {loc_region}',
+        f'"{core_job}" salary range {country}',
+        f'"{core_job}" compensation {country}',
+        f'"{core_job}" pay {country}',
+        f'"{core_job}" wage {country}',
+        f'"{core_job}" earnings {country}',
+        f'"{core_job}" salary survey {country}',
+        f'"{core_job}" total compensation {country}',
+        f'"{core_job}" hourly rate {country}',
+        f'how much does a {core_job} make in {country}',
+        f'{core_job} salary guide {country}',
     ]
-    return targets
+
+    # -- City-specific queries (if city provided) --
+    if city:
+        queries += [
+            f'"{core_job}" salary {loc_full}',
+            f'"{core_job}" pay {loc_full}',
+            f'"{core_job}" compensation {loc_full}',
+            f'how much does a {core_job} make in {city}',
+        ]
+
+    # -- State/region queries (if state provided) --
+    if state and state != country:
+        queries += [
+            f'"{core_job}" salary {state}',
+            f'"{core_job}" average pay {state} {country}',
+        ]
+
+    # -- Site-specific queries for every major salary DB --
+    for site in SALARY_SITES:
+        queries.append(f'site:{site} "{core_job}" salary {country}')
+
+    # -- Country-specific local salary site queries --
+    for site in COUNTRY_SALARY_SITES.get(country, []):
+        queries.append(f'site:{site} "{core_job}" salary')
+        queries.append(f'site:{site} {core_job}')
+
+    # -- Local-language queries --
+    for tmpl in COUNTRY_LOCAL_QUERIES.get(country, []):
+        queries.append(tmpl.format(job=core_job))
+
+    # -- Alternate phrasing queries --
+    queries += [
+        f'{core_job} salary range {country} {_CURRENT_YEAR - 1} {_CURRENT_YEAR}',
+        f'{core_job} salary percentile {country}',
+        f'{core_job} entry level salary {country}',
+        f'{core_job} senior salary {country}',
+        f'{core_job} median salary {country}',
+    ]
+
+    return queries
 
 
-def _extract_jsonld_snippet(soup) -> str:
-    """Try to extract a salary snippet from JSON-LD structured data."""
-    try:
-        from bs4 import BeautifulSoup  # local import to keep module-level clean
-        scripts = soup.find_all("script", type="application/ld+json")
-        for script in scripts:
-            try:
-                data = json.loads(script.string or "")
-                items = data if isinstance(data, list) else [data]
-                for item in items:
-                    t = (item.get("@type") or "").lower()
-                    if "occupation" in t or "joboffer" in t or "jobposting" in t:
-                        est = item.get("estimatedSalary") or item.get("baseSalary") or {}
-                        if est:
-                            val = est.get("value") or {}
-                            lo  = val.get("minValue") or est.get("minValue") or ""
-                            hi  = val.get("maxValue") or est.get("maxValue") or ""
-                            cur = est.get("currency") or val.get("currency") or "USD"
-                            unit = val.get("unitText") or est.get("unitText") or "YEAR"
-                            if lo or hi:
-                                return f"Salary: {cur} {lo}–{hi} per {unit.lower()}"
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return ""
+def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
+    """
+    Execute all SerpAPI queries and return deduplicated, quality-scored results.
+    Collects up to MAX_SEARCH_RESULTS unique sources.
+    Enriches query list with plan["query_strategies"] and plan["target_sites"] when provided.
+    """
+    key = secret("SERPAPI_API_KEY")
+    queries = build_queries(job, country, state, city)
+    gl, hl = get_country_codes(country)
 
-
-def _extract_meta_snippet(soup) -> str:
-    """Extract salary info from meta description tags."""
-    try:
-        for name in ["description", "og:description", "twitter:description"]:
-            tag = soup.find("meta", attrs={"name": name}) or soup.find("meta", attrs={"property": name})
-            if tag:
-                content = (tag.get("content") or "").strip()
-                if content and _SALARY_RE.search(content):
-                    return content[:500]
-    except Exception:
-        pass
-    return ""
-
-
-def _extract_text_snippet(soup) -> str:
-    """Regex scan on visible page text for salary patterns."""
-    try:
-        # Remove script/style to keep clean text
-        for tag in soup(["script", "style", "nav", "footer", "header"]):
-            tag.decompose()
-        text = soup.get_text(separator=" ", strip=True)
-        # Find salary mentions
-        matches = _SALARY_RE.findall(text)
-        if matches:
-            # Return first 3 unique matches as a snippet
-            seen = []
-            for m in matches:
-                m = m.strip()
-                if m and m not in seen:
-                    seen.append(m)
-                if len(seen) >= 3:
-                    break
-            return " | ".join(seen)
-    except Exception:
-        pass
-    return ""
-
-
-def _scrape_one(url: str, host: str) -> Optional[Dict]:
-    """Fetch one salary page and return a result dict, or None on failure."""
-    import requests
-    try:
-        r = requests.get(url, headers=_HEADERS, timeout=10, allow_redirects=True)
-        if r.status_code not in (200, 203):
-            return None
-        ct = r.headers.get("content-type", "")
-        if "html" not in ct:
-            return None
-        html = r.text
-        if len(html) < 500:
-            return None
-
-        # Parse with BeautifulSoup (lxml preferred, html.parser fallback)
+    # ── Append planner query strategies ──
+    location = ", ".join(x for x in [city, state, country] if x) or country
+    for tmpl in (plan.get("query_strategies") or []):
         try:
-            from bs4 import BeautifulSoup
-            try:
-                soup = BeautifulSoup(html, "lxml")
-            except Exception:
-                soup = BeautifulSoup(html, "html.parser")
-        except ImportError:
-            return None
+            queries.append(tmpl.format(job=job, location=location))
+        except KeyError:
+            pass  # skip templates with unknown placeholders
 
-        # Extract title
-        title_tag = soup.find("title")
-        title = (title_tag.get_text(strip=True) if title_tag else host)[:200]
+    # ── Append planner target sites not already in SALARY_SITES ──
+    existing_site_set = set(SALARY_SITES)
+    for site in (plan.get("target_sites") or []):
+        if site not in existing_site_set:
+            queries.append(f'site:{site} "{job}" salary')
 
-        # Try extraction methods in priority order
-        snippet = _extract_jsonld_snippet(soup)
-        if not snippet:
-            snippet = _extract_meta_snippet(soup)
-        if not snippet:
-            snippet = _extract_text_snippet(soup)
-
-        if not snippet:
-            return None
-
-        return {
-            "url": url,
-            "title": title,
-            "snippet": snippet[:500],
-            "host": host,
-            "quality": source_quality(url),
-        }
-    except Exception:
-        return None
-
-
-def run_scraper(job: str, country: str, state: str, city: str) -> List[Dict]:
-    """
-    Directly scrape salary pages for the given job+location.
-    Returns results in the same shape as SerpAPI organic results.
-    Hard cap: 30 seconds total, 10 seconds per page.
-    Failures are silently skipped — scraper is supplemental, not critical.
-    """
-    targets = _build_scraper_urls(job, country, state, city)
     results: List[Dict] = []
+    seen_urls: set = set()
+    seen_hosts_count: Dict[str, int] = {}
+    failed_queries = 0
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = {
-            pool.submit(_scrape_one, url, host): (url, host)
-            for url, host in targets
-        }
-        for future in as_completed(futures, timeout=30):
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-            except Exception:
-                pass
+    for q in queries:
+        if len(results) >= MAX_SEARCH_RESULTS:
+            break
+        if failed_queries > 5:
+            break
+        try:
+            params = {"engine": "google", "q": q, "api_key": key, "num": 10}
+            if gl:
+                params["gl"] = gl
+                params["hl"] = hl
+            r = http_get(SERPAPI_URL, params=params)
+            r.raise_for_status()
+            data = r.json()
 
+            for item in data.get("organic_results") or []:
+                url = (item.get("link") or "").strip()
+                if not url or not url.startswith("http"):
+                    continue
+                if is_blocked(url):
+                    continue
+                if url in seen_urls:
+                    continue
+
+                h = host_of(url)
+                host_count = seen_hosts_count.get(h, 0)
+                if host_count >= 6:
+                    continue
+
+                seen_urls.add(url)
+                seen_hosts_count[h] = host_count + 1
+
+                results.append({
+                    "url": url,
+                    "title": (item.get("title") or "")[:200],
+                    "snippet": (item.get("snippet") or "")[:500],
+                    "host": h,
+                    "quality": source_quality(url),
+                    "query": q[:80],
+                })
+
+        except Exception:
+            failed_queries += 1
+            continue
+
+    results.sort(key=lambda x: (x["quality"], len(x.get("snippet", ""))), reverse=True)
     return results
+
+
+def _merge_sources(serp: List[Dict], scraped: List[Dict]) -> List[Dict]:
+    """Combine SerpAPI + scraped results, deduplicate by URL, re-sort by quality."""
+    combined: List[Dict] = list(serp)
+    seen_urls = {r["url"] for r in serp}
+
+    for r in scraped:
+        if r.get("url") and r["url"] not in seen_urls:
+            seen_urls.add(r["url"])
+            combined.append(r)
+
+    combined.sort(key=lambda x: (x.get("quality", 0), len(x.get("snippet", ""))), reverse=True)
+    return combined[:MAX_SEARCH_RESULTS]
+
+
+def search_web(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
+    """
+    Run SerpAPI queries and direct scraper in parallel, then merge results.
+    Aims to collect 80–150 unique sources before sending to Claude.
+    Accepts an optional SearchPlan dict from site_planner to enrich queries.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        serp_future    = pool.submit(_search_serpapi, job, country, state, city, plan)
+        scraper_future = pool.submit(run_scraper,     job, country, state, city)
+
+        serp_results    = serp_future.result(timeout=180)
+        scraper_results = scraper_future.result(timeout=40)
+
+    return _merge_sources(serp_results, scraper_results)
