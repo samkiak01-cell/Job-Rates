@@ -80,15 +80,6 @@ def _default_plan(country: str) -> Dict:
     country_sites = COUNTRY_SALARY_SITES.get(country, [])
     sites = list(dict.fromkeys(PLANNER_DEFAULT_SITES + country_sites))[:30]
 
-    location_placeholder = country
-    queries = [
-        f'"{{{job}}}" salary {location_placeholder}',
-        f'"{{{job}}}" average salary {location_placeholder}',
-        f'"{{{job}}}" salary range {location_placeholder}',
-        f'"{{{job}}}" compensation {location_placeholder}',
-        f'how much does a {{{job}}} make in {location_placeholder}',
-    ]
-    # Use actual country name in templates
     queries = [
         f'"{{job}}" salary {country}',
         f'"{{job}}" average salary {country}',
@@ -138,12 +129,8 @@ def plan_search(
         )
         resp.raise_for_status()
 
-        content = resp.json().get("content") or [{}]
-        raw = ""
-        for block in content:
-            if block.get("type") == "text":
-                raw += block.get("text", "")
-        raw = raw.strip()
+        content = resp.json().get("content") or []
+        raw = "".join(b.get("text", "") for b in content if b.get("type") == "text").strip()
 
         # Strip markdown fences if model added them despite instructions
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -160,13 +147,12 @@ def plan_search(
         plan["target_sites"]     = list(plan["target_sites"])[:30]
         plan["query_strategies"] = list(plan["query_strategies"])[:10]
 
-        # ── Validate period_hint ──
+        # ── Validate period_hint + currency ──
+        _dp = _default_plan(country)
         if plan["period_hint"] not in {"annual", "monthly"}:
-            plan["period_hint"] = _default_plan(country)["period_hint"]
-
-        # ── Validate currency ──
+            plan["period_hint"] = _dp["period_hint"]
         if not isinstance(plan["currency"], str) or not plan["currency"].strip():
-            plan["currency"] = _default_plan(country)["currency"]
+            plan["currency"] = _dp["currency"]
         else:
             plan["currency"] = plan["currency"].strip().upper()
 
