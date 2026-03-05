@@ -56,8 +56,8 @@ CSS = """
   --b3: rgba(115,147,249,.5);
   /* text */
   --tx:  #e2e9f8;
-  --tx2: #8fa6cc;
-  --mt:  #4a6080;
+  --tx2: #b4ccec;
+  --mt:  #6a90b8;
   /* brand */
   --emerald:    #00cc55;
   --emerald-d:  rgba(0,204,85,.12);
@@ -108,7 +108,7 @@ div[data-testid="stContainer"] {
 label,
 .stMarkdown p {
   color: var(--tx2) !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 600 !important;
   letter-spacing: .04em !important;
   text-transform: uppercase !important;
@@ -199,7 +199,7 @@ label,
 
 /* ── Section divider ────────────────────────── */
 .sec-label {
-  font-size: 10px; font-weight: 700; letter-spacing: .16em;
+  font-size: 12px; font-weight: 700; letter-spacing: .16em;
   text-transform: uppercase; color: var(--mt);
   margin: 28px 0 12px; display: flex; align-items: center; gap: 12px;
 }
@@ -219,7 +219,7 @@ label,
   background: linear-gradient(90deg, var(--emerald), var(--wisteria));
 }
 .ai-badge {
-  font-size: 10px; font-weight: 700; letter-spacing: .15em;
+  font-size: 12px; font-weight: 700; letter-spacing: .15em;
   text-transform: uppercase; color: var(--emerald); margin-bottom: 10px;
   display: flex; align-items: center; gap: 7px;
 }
@@ -258,13 +258,13 @@ label,
   pointer-events: none;
 }
 .range-grid { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; }
-.range-lbl  { font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--mt); margin-bottom: 7px; }
+.range-lbl  { font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--tx2); margin-bottom: 7px; }
 .range-val  { font-family: var(--mono); font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1; color: var(--tx); }
-.range-unit { font-size: 12px; color: var(--mt); margin-top: 7px; }
+.range-unit { font-size: 13px; color: var(--tx2); margin-top: 7px; }
 .range-sep  { font-size: 26px; color: var(--b2); padding-bottom: 12px; }
 .range-mid  { margin-left: auto; text-align: center; }
 .range-mid-val { font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--emerald); }
-.range-mid-lbl { font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--emerald); opacity: .7; margin-bottom: 6px; }
+.range-mid-lbl { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--emerald); opacity: .85; margin-bottom: 6px; }
 
 /* ── Stats bar ──────────────────────────────── */
 .stats-bar {
@@ -305,24 +305,24 @@ label,
 }
 .bd-left  { display: flex; align-items: center; gap: 10px; }
 .bd-tag   {
-  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  font-size: 12px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; padding: 4px 10px;
   border-radius: 7px; white-space: nowrap;
 }
-.bd-desc  { font-size: 14px; color: var(--mt); }
+.bd-desc  { font-size: 14px; color: var(--tx2); }
 .bd-right { text-align: right; flex-shrink: 0; }
 .bd-range { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--tx); white-space: nowrap; }
-.bd-avg   { font-family: var(--mono); font-size: 11px; color: var(--mt); margin-top: 3px; }
+.bd-avg   { font-family: var(--mono); font-size: 13px; color: var(--tx2); margin-top: 3px; }
 .pts-badge {
-  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  font-size: 11px; font-weight: 700; font-family: var(--mono);
   padding: 2px 8px; border-radius: 20px; white-space: nowrap;
 }
 
 /* ── Source pills ───────────────────────────── */
 .src-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 .src-pill  {
-  display: inline-block; padding: 3px 10px; border-radius: 20px;
-  border: 1px solid; font-size: 11px; font-family: var(--mono);
+  display: inline-block; padding: 4px 12px; border-radius: 20px;
+  border: 1px solid; font-size: 13px; font-family: var(--mono);
   text-decoration: none; white-space: nowrap;
   transition: opacity .15s, transform .12s;
 }
@@ -345,8 +345,8 @@ label,
 }
 .src-item:hover { border-color: var(--b2); background: var(--s2); }
 .src-dot   { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
-.src-title { color: var(--tx); font-weight: 600; font-size: 13px; }
-.src-meta  { color: var(--mt); font-size: 11px; margin-top: 2px; }
+.src-title { color: var(--tx); font-weight: 600; font-size: 14px; }
+.src-meta  { color: var(--tx2); font-size: 12px; margin-top: 2px; }
 
 .band-divider { height: 1px; background: var(--b0); margin: 4px 0 10px; }
 .note-box {
@@ -361,7 +361,7 @@ label,
   margin-bottom: 8px;
 }
 .stat-card-lbl {
-  font-size: 10px; font-weight: 700; letter-spacing: .14em;
+  font-size: 12px; font-weight: 700; letter-spacing: .12em;
   text-transform: uppercase; color: var(--mt); margin-bottom: 6px;
 }
 .stat-card-val {
@@ -369,7 +369,7 @@ label,
   color: var(--tx); line-height: 1.1;
 }
 .stat-card-unit {
-  font-size: 11px; color: var(--mt); margin-top: 4px;
+  font-size: 12px; color: var(--tx2); margin-top: 4px;
 }
 </style>
 """
@@ -401,7 +401,7 @@ st.markdown("""
       Job Rate Finder
     </div>
     <div style="color:rgba(226,233,248,.5);font-size:14px;margin-top:8px;font-weight:400;">
-      100+ sources &middot; analyzed by Claude AI &middot; live FX conversion
+      100+ sources &middot; AI-powered analysis &middot; live FX conversion
     </div>
   </div>
 </div>
@@ -459,13 +459,7 @@ def render_band_sources(
 
     pills = ""
     for dp in ordered:
-        # lo pill → show source's reported low-end; hi pill → high-end; avg → midpoint
-        if dp is src_lo:
-            display_usd = dp.get("value_min_usd") or dp["annual_usd"]
-        elif dp is src_hi:
-            display_usd = dp.get("value_max_usd") or dp["annual_usd"]
-        else:
-            display_usd = dp["annual_usd"]
+        display_usd = dp["annual_usd"]
         val  = compact_money(display_usd, currency, rate_type)
         host = html_mod.escape((dp.get("host") or "source")[:24])
         url  = html_mod.escape(dp.get("url", "#"), quote=True)
@@ -538,19 +532,9 @@ BAND_SPECS = {
         "#00cc55", "rgba(0,204,85,.12)", "#00cc55", "#00cc55",
     ),
     2: (
-        "2&sigma;&nbsp;Extended",
-        "Middle 95% &mdash; 2.5th to 97.5th percentile",
-        "#7393f9", "rgba(115,147,249,.12)", "#7393f9", "#7393f9",
-    ),
-    3: (
-        "3&sigma;&nbsp;Full Spread",
+        "2&sigma;&nbsp;Full Range",
         "Observed full range after outlier removal",
-        "#8fa6cc", "rgba(143,166,204,.1)", "#4a6080", "#8fa6cc",
-    ),
-    "obs": (
-        "Observed&nbsp;Min/Max",
-        "Actual lowest and highest after outlier removal",
-        "#4a6080", "rgba(74,96,128,.12)", "#2a3d5a", "#4a6080",
+        "#7393f9", "rgba(115,147,249,.12)", "#7393f9", "#7393f9",
     ),
 }
 
@@ -741,7 +725,7 @@ with st.container(border=True):
 if st.session_state.get("go_btn"):
     st.session_state["error"]  = None
     st.session_state["result"] = None
-    with st.spinner("Searching 100+ salary sources and analyzing with Claude AI…"):
+    with st.spinner("Searching 100+ salary sources and analyzing…"):
         try:
             st.session_state["result"] = run_analysis(
                 job=st.session_state["job_title"].strip(),
@@ -780,7 +764,7 @@ mean_usd = stats["mean"] if stats else (res["ai_mid_usd"])
 if res.get("ai_summary"):
     st.markdown(f"""
 <div class="ai-card">
-  <div class="ai-badge">Claude AI Analysis</div>
+  <div class="ai-badge">AI Market Analysis</div>
   <p class="ai-text">{html_mod.escape(res['ai_summary'])}</p>
 </div>""", unsafe_allow_html=True)
 
@@ -811,6 +795,9 @@ ai_pills = render_band_sources(
 st.markdown(f"""
 <div class="range-card">
   <div class="range-glow"></div>
+  <div class="ai-badge" style="margin-bottom:18px;font-size:13px;letter-spacing:.1em;">
+    AI Recommended Range
+  </div>
   <div class="range-grid">
     <div>
       <div class="range-lbl">Low End</div>
@@ -882,8 +869,8 @@ if stats:
     rows_html += render_band_row(lbl, desc, tc, tbg, la, ai_min_s, ai_max_s, ai_mid_s, curr, unit, ai_p, ai_n, "ai")
     rows_html += '<div class="band-divider"></div>'
 
-    # Bands 1–3 — sigma
-    for sig in [1, 2, 3]:
+    # Bands 1–2 — sigma (sigma3 collapses to sigma2 with typical data volumes, so omit)
+    for sig in [1, 2]:
         lo_d, hi_d  = stats[f"sigma{sig}"]
         lbl, desc, tc, tbg, la, ac = BAND_SPECS[sig]
         lo_s  = display_money(lo_d, curr, rt)
@@ -892,13 +879,6 @@ if stats:
         sig_n = stats[f"sigma{sig}_count"]
         pills = render_band_sources(lo_d, hi_d, stats["mean"], curr, rt, dps, ac)
         rows_html += render_band_row(lbl, desc, tc, tbg, la, lo_s, hi_s, avg_s, curr, unit, pills, sig_n)
-
-    rows_html += '<div class="band-divider"></div>'
-
-    # Band 4 — Observed Min/Max
-    lbl, desc, tc, tbg, la, ac = BAND_SPECS["obs"]
-    obs_p = render_band_sources(stats["min"], stats["max"], stats["mean"], curr, rt, dps, ac)
-    rows_html += render_band_row(lbl, desc, tc, tbg, la, min_s, max_s, mean_s, curr, unit, obs_p, count, "obs")
 
     st.markdown(rows_html, unsafe_allow_html=True)
 
