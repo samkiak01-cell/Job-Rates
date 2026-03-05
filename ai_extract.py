@@ -283,12 +283,8 @@ def claude_extract(
     )
     resp.raise_for_status()
 
-    # Extract text from response
-    content = resp.json().get("content") or [{}]
-    raw = ""
-    for block in content:
-        if block.get("type") == "text":
-            raw += block.get("text", "")
+    content = resp.json().get("content") or []
+    raw = "".join(b.get("text", "") for b in content if b.get("type") == "text")
 
     raw = raw.strip()
 
