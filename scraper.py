@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
-from utils import host_of, source_quality
+from utils import get_country_codes, host_of, source_quality
 
 # Browser-like headers to reduce bot detection
 _HEADERS = {
@@ -54,35 +54,17 @@ def _job_slug_title(job: str) -> str:
     return "-".join(w.capitalize() for w in job.strip().split())
 
 
-def _loc_slug(text: str) -> str:
-    return re.sub(r"\s+", "-", text.strip().lower())
-
-
-def _country_code_2(country: str) -> str:
-    _MAP = {
-        "United States": "US", "United Kingdom": "GB", "Canada": "CA",
-        "Australia": "AU", "Germany": "DE", "France": "FR", "Spain": "ES",
-        "Italy": "IT", "Brazil": "BR", "Mexico": "MX", "India": "IN",
-        "Japan": "JP", "Philippines": "PH", "Singapore": "SG",
-        "Netherlands": "NL", "Sweden": "SE", "Switzerland": "CH",
-        "Ireland": "IE", "New Zealand": "NZ", "South Korea": "KR",
-        "China": "CN", "UAE": "AE", "Saudi Arabia": "SA",
-        "South Africa": "ZA", "Poland": "PL", "Israel": "IL",
-    }
-    return _MAP.get(country, "US")
-
-
 def _build_scraper_urls(job: str, country: str, state: str, city: str) -> List[Tuple[str, str]]:
     """Return list of (url, host_label) tuples to scrape."""
     slug    = _job_slug(job)
     slug2   = _job_slug_title(job)
     enc     = quote_plus(job)
-    c2      = _country_code_2(country)
+    c2      = get_country_codes(country)[0].upper() or "US"
     c_lower = country.lower().replace(" ", "-")
 
     loc_parts = [p for p in [city, state, country] if p]
     loc_enc   = quote_plus(", ".join(loc_parts)) if loc_parts else quote_plus(country)
-    city_slug = _loc_slug(city) if city else _loc_slug(country)
+    city_slug = _job_slug(city) if city else _job_slug(country)
 
     targets: List[Tuple[str, str]] = [
         (f"https://www.talent.com/salary?job={enc}&location={loc_enc}", "talent.com"),
