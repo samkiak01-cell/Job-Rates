@@ -459,8 +459,12 @@ def render_band_sources(
 
     pills = ""
     for dp in ordered:
-        display_usd = dp["annual_usd"]
-        val  = compact_money(display_usd, currency, rate_type)
+        v_min = dp.get("value_min_usd")
+        v_max = dp.get("value_max_usd")
+        if v_min and v_max:
+            val = f"{compact_money(v_min, currency, rate_type)}–{compact_money(v_max, currency, rate_type)}"
+        else:
+            val = compact_money(dp["annual_usd"], currency, rate_type)
         host = html_mod.escape((dp.get("host") or "source")[:24])
         url  = html_mod.escape(dp.get("url", "#"), quote=True)
         pills += (
