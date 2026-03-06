@@ -1,12 +1,11 @@
 """
 search.py -- Web search strategy for Job Rate Finder
-Runs SerpAPI queries and direct scraping in parallel for maximum source coverage.
+Runs SerpAPI queries for maximum source coverage.
 """
 
 from __future__ import annotations
 
 import datetime
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 from utils import (
@@ -21,8 +20,6 @@ from utils import (
     secret,
     source_quality,
 )
-from scraper import run_scraper
-
 _CURRENT_YEAR = datetime.date.today().year
 
 
@@ -194,31 +191,9 @@ def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = 
     return results
 
 
-def _merge_sources(serp: List[Dict], scraped: List[Dict]) -> List[Dict]:
-    """Combine SerpAPI + scraped results, deduplicate by URL, re-sort by quality."""
-    combined: List[Dict] = list(serp)
-    seen_urls = {r["url"] for r in serp}
-
-    for r in scraped:
-        if r.get("url") and r["url"] not in seen_urls:
-            seen_urls.add(r["url"])
-            combined.append(r)
-
-    combined.sort(key=lambda x: (x.get("quality", 0), len(x.get("snippet", ""))), reverse=True)
-    return combined[:MAX_SEARCH_RESULTS]
-
-
 def search_web(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
     """
-    Run SerpAPI queries and direct scraper in parallel, then merge results.
-    Aims to collect 80–150 unique sources before sending to Claude.
+    Run SerpAPI queries and return deduplicated, quality-sorted results.
     Accepts an optional SearchPlan dict from site_planner to enrich queries.
     """
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        serp_future    = pool.submit(_search_serpapi, job, country, state, city, plan)
-        scraper_future = pool.submit(run_scraper,     job, country, state, city)
-
-        serp_results    = serp_future.result(timeout=180)
-        scraper_results = scraper_future.result(timeout=40)
-
-    return _merge_sources(serp_results, scraper_results)
+    return _search_serpapi(job, country, state, city, plan)
