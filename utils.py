@@ -24,7 +24,7 @@ MAX_DISPLAYED_SOURCES = 50
 HOURS_PER_YEAR = 2080
 SERPAPI_URL = "https://serpapi.com/search.json"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-CLAUDE_MODEL = "claude-opus-4-20250514"
+CLAUDE_MODEL = "claude-opus-4-6"
 COUNTRIESNOW_BASE = "https://countriesnow.space/api/v0.1"
 
 # ─────────────────────────────────────────────
