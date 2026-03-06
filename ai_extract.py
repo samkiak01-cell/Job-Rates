@@ -59,13 +59,27 @@ Convert everything to ANNUAL USD. Be precise about currency detection:
 Monthly-pay countries: Brazil, Mexico, Philippines, Japan, UAE, Saudi Arabia, China.
 If you see "R$ 5,000" with no period stated, assume MONTHLY. Conversion: value × 12 = annual local, then ÷ exchange_rate = USD.
 
-RULE 4 — CONFIDENCE SCORES:
+RULE 4 — BASE SALARY ONLY:
+Extract BASE SALARY figures only. Do NOT extract total compensation (base + stock + bonus).
+- If a source (e.g. Levels.fyi, Glassdoor) reports both base and total comp, extract ONLY the base salary number.
+- If a source only reports total compensation with no base breakdown, skip it entirely.
+- Bonus, equity, RSU, signing bonus — exclude all of these from extracted values.
+
+RULE 5 — EXPERIENCE LEVEL TAGGING:
+For every data point, identify the experience level from context and include it in the label:
+- "Entry" = 0–2 yrs, junior, associate, I/II
+- "Mid" = 3–6 yrs, mid-level, III
+- "Senior" = 7+ yrs, senior, staff, lead, principal, IV+
+- "General" = no level specified, or site-wide average
+If a source gives separate figures for multiple levels, extract EACH as its own data point.
+
+RULE 6 — CONFIDENCE SCORES:
 - 0.85–1.0: Major salary databases with specific data for exact role+location: Glassdoor, Indeed, PayScale, Salary.com, Levels.fyi, Naukri, StepStone, Seek, Reed, Catho, Vagas, Doda, JobStreet, Saramin
 - 0.6–0.84: Job postings with stated salary; regional salary sites with approximate data
 - 0.3–0.59: Blog posts, forums, or tangentially related data
 - Below 0.3: Do not include
 
-RULE 5 — FINAL SANITY CHECK before submitting JSON:
+RULE 7 — FINAL SANITY CHECK before submitting JSON:
 Review your extracted data_points and ask:
 1. Are all USD values reasonable for this country and role?
 2. Did I accidentally include data from the wrong country or wrong job?
@@ -205,7 +219,18 @@ STEP 4 — RECOMMEND a realistic range:
   - The min/max should represent a realistic offer range, NOT statistical extremes
   - The midpoint should be what a typical candidate would expect
 
-STEP 5 — RANGES in data_points:
+STEP 5 — EXTRACT MULTIPLE DATA POINTS PER SOURCE:
+  - A single source often contains MORE THAN ONE base salary figure. Extract ALL of them as separate data_points entries.
+  - Examples:
+      • Glassdoor shows entry/mid/senior → 3 separate data_points, each with the correct experience level in the label
+      • Indeed shows national average AND California average → 2 data_points
+      • Salary.com shows Software Engineer I, II, III → 3 data_points
+      • A job posting states a range → 1 data_point with min/max filled
+  - Use the same source_idx for all points from the same source, but give each a distinct label including experience level.
+  - DO NOT stop at the first number you see. Scan the ENTIRE snippet for every distinct base salary figure.
+  - Minimum target: aim for 2–4 data_points per high-quality source that contains multiple figures.
+
+STEP 6 — RANGES in data_points:
   - If a source gives a salary RANGE (e.g. '$60k–$90k'), put the midpoint in value_annual_usd,
     the low end (converted to annual USD) in value_min_annual_usd, and the high end in value_max_annual_usd.
   - If a source gives a SINGLE value, set both value_min_annual_usd and value_max_annual_usd to null.
