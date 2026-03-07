@@ -432,10 +432,11 @@ def render_band_sources(
     accent_color: str,
 ) -> str:
     """
-    2–3 source pills per band:
-      • Source closest to the band low  (supports the min)
-      • Source closest to the band high (supports the max)
-      • Source closest to the mean      (supports the average) — only if distinct
+    3 source pills per band — each pill displays the BAND BOUNDARY value and
+    links to the nearest supporting source in the data table.
+
+    Pill values always match the displayed band numbers because we use lo_usd /
+    mean_usd / hi_usd for the label, not the data point's own annual_usd.
     """
     hits = [
         dp for dp in data_points
@@ -444,23 +445,28 @@ def render_band_sources(
     if not hits:
         return ""
 
+    # Nearest data point to each boundary — used only for host + URL
     src_lo  = min(hits, key=lambda d: abs(d["annual_usd"] - lo_usd))
     src_hi  = min(hits, key=lambda d: abs(d["annual_usd"] - hi_usd))
     src_avg = min(hits, key=lambda d: abs(d["annual_usd"] - mean_usd))
 
-    # Deduplicate by identity, then sort ascending by value
-    seen: set = set()
-    ordered: List[Dict] = []
-    for dp in [src_lo, src_avg, src_hi]:
-        if id(dp) not in seen:
-            ordered.append(dp)
-            seen.add(id(dp))
-    ordered.sort(key=lambda d: d["annual_usd"])
+    # Each entry: (display_value, source_dp)
+    entries = [(lo_usd, src_lo), (mean_usd, src_avg), (hi_usd, src_hi)]
+
+    # Deduplicate by source identity (same URL → keep first occurrence)
+    seen_ids: set = set()
+    deduped = []
+    for display_val, dp in entries:
+        if id(dp) not in seen_ids:
+            deduped.append((display_val, dp))
+            seen_ids.add(id(dp))
+
+    # Sort ascending by display value so pills read lo → avg → hi
+    deduped.sort(key=lambda x: x[0])
 
     pills = ""
-    for dp in ordered:
-        # Always use the midpoint annual_usd — min/max can fall outside the band
-        val  = compact_money(dp["annual_usd"], currency, rate_type)
+    for display_val, dp in deduped:
+        val  = compact_money(display_val, currency, rate_type)
         host = html_mod.escape((dp.get("host") or "source")[:24])
         url  = html_mod.escape(dp.get("url", "#"), quote=True)
         pills += (
