@@ -39,13 +39,22 @@ Only extract data for the EXACT job title requested, or a genuinely synonymous t
 - "Graphic Designer" ≠ "UX Designer", "Web Developer"
 For EVERY source, explicitly decide: Is this data for the correct job title? If not certain, SKIP IT.
 
-RULE 2 — COUNTRY PRECISION:
-Only extract data for the target country. Watch for these wrong-country warning signs:
-- Salary scale far too high for the target country (e.g., $80k+ for a Brazilian role with no USD context)
-- $ symbol with no mention of the target country or currency
-- .com domain with no country-specific context indicator
-- Comparison articles that mention multiple countries — only extract the target country's data
-If the source does not clearly confirm the correct country, SKIP IT.
+RULE 2 — LOCATION PRECISION (country AND city/state):
+Only extract data matching the target location at the most specific level provided.
+a) COUNTRY: Salary scale must match the target country. Wrong-country signals:
+   - Salary far too high for the target country (e.g., $80k+ for a Brazilian role)
+   - $ symbol with no country-specific context
+   - .com domain with no country indicator
+   - Multi-country comparison — extract ONLY the target country's figures
+   If country is not clearly confirmed → SKIP the source.
+b) STATE/CITY: If a specific state or city was requested, tag each data point with
+   its actual geographic scope using the "location_specificity" field:
+   - "city"     — data explicitly covers the requested city (e.g., "in San Francisco")
+   - "state"    — data covers the requested state/region (e.g., "in California")
+   - "national" — national average for the country, not city/state specific
+   - "unknown"  — location scope is unclear
+   DO NOT skip state/national data — extract it and tag it. The caller will use
+   location_specificity to weight the sigma bands appropriately.
 
 RULE 3 — CURRENCY AND PAY PERIOD:
 Convert everything to ANNUAL USD. Be precise about currency detection:
@@ -245,6 +254,7 @@ Return ONLY this JSON structure:
       "source_idx": <1-based source number>,
       "label": "<brief: level, location, data type e.g. 'Senior, base salary, Glassdoor'>",
       "confidence": <0.3 to 1.0>,
+      "location_specificity": "<'city', 'state', 'national', or 'unknown'>",
       "original_value": "<raw value as found e.g. 'R$ 5,000/month' or '$45/hr'>",
       "conversion_note": "<step by step: 'R$ 5000/mo × 12 = R$ 60000/yr ÷ 5.0 = $12,000 USD'>"
     }}
@@ -370,12 +380,18 @@ def process_extraction(
         src_idx = int(dp.get("source_idx", 1)) - 1
         src = sources[src_idx] if 0 <= src_idx < len(sources) else {}
 
+        # Normalise location_specificity to valid set
+        loc_spec = dp.get("location_specificity", "unknown")
+        if loc_spec not in {"city", "state", "national", "unknown"}:
+            loc_spec = "unknown"
+
         data_table.append({
             "annual_usd": v,
             "value_min_usd": v_min,
             "value_max_usd": v_max,
             "label": dp.get("label", ""),
             "confidence": float(dp.get("confidence", 0.7)),
+            "location_specificity": loc_spec,
             "original_value": dp.get("original_value", ""),
             "conversion_note": dp.get("conversion_note", ""),
             "url": src.get("url", ""),
