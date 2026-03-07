@@ -912,7 +912,7 @@ if stats:
         pills = render_band_sources(lo_d, hi_d, stats["mean"], curr, rt, dps, ac)
         # Annotate sigma1 description when it was built from location-specific data
         if sig == 1 and stats.get("sigma1_location_specific"):
-            loc_label = city or state or country
+            loc_label = (st.session_state.get("city") or st.session_state.get("state") or st.session_state.get("country") or "")
             desc = f"Middle 68% &mdash; {html_mod.escape(loc_label)}-specific data"
         rows_html += render_band_row(lbl, desc, tc, tbg, la, lo_s, hi_s, avg_s, curr, unit, pills, sig_n)
 
