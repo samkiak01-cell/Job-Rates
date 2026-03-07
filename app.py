@@ -25,8 +25,10 @@ from utils import (
     pretty_host,
     to_currency,
 )
+import concurrent.futures
 import site_planner
 from search import search_web
+from scraper import run_scraper
 from ai_extract import claude_extract, process_extraction
 
 
@@ -574,12 +576,29 @@ def run_analysis(
 ) -> Dict:
     core_job = job.strip()
 
+    # ── Phase 1: Plan + Search + Scrape in parallel ──────────────────────────
+    # plan_search (Haiku, ~5s) runs first because search_web needs the plan.
+    # Once the plan is ready we fire search + scraper concurrently.
     plan = site_planner.plan_search(core_job, country, state, city, exp_years)
 
-    sources = search_web(core_job, country, state, city, plan)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f_search = pool.submit(search_web, core_job, country, state, city, plan)
+        f_scrape = pool.submit(run_scraper, core_job, country, state, city)
+        serp_sources   = f_search.result()
+        scrape_sources = f_scrape.result()
+
+    # Merge scraper results — deduplicate by URL
+    existing_urls = {s["url"] for s in serp_sources}
+    for sr in scrape_sources:
+        if sr.get("url") and sr["url"] not in existing_urls:
+            serp_sources.append(sr)
+            existing_urls.add(sr["url"])
+
+    sources = serp_sources
     if not sources:
         raise RuntimeError("No search results found. Try a different job title or location.")
 
+    # ── Phase 2: Claude extraction ───────────────────────────────────────────
     ai_data = claude_extract(
         job=core_job, country=country, state=state, city=city,
         exp_years=exp_years, rate_type=rate_type, job_desc=job_desc,
@@ -598,7 +617,16 @@ def run_analysis(
     if ai_min > ai_max:
         ai_min, ai_max = ai_max, ai_min
 
-    stats = compute_stats(data_table, ai_min=ai_min, ai_max=ai_max)
+    # ── Phase 3: Compute stats with location-aware sigma1 ───────────────────
+    # sigma1 (Typical, ~68%) is built from city/state-specific data when
+    # available (≥4 rows). sigma2 always uses the full dataset.
+    loc_specific = [
+        r for r in data_table
+        if r.get("location_specificity") in ("city", "state")
+    ]
+    sigma1_table = loc_specific if len(loc_specific) >= 4 else None
+
+    stats = compute_stats(data_table, ai_min=ai_min, ai_max=ai_max, sigma1_table=sigma1_table)
     if stats:
         data_table = [
             row for row in data_table
@@ -882,6 +910,10 @@ if stats:
         avg_s = display_money(stats["mean"], curr, rt)
         sig_n = stats[f"sigma{sig}_count"]
         pills = render_band_sources(lo_d, hi_d, stats["mean"], curr, rt, dps, ac)
+        # Annotate sigma1 description when it was built from location-specific data
+        if sig == 1 and stats.get("sigma1_location_specific"):
+            loc_label = city or state or country
+            desc = f"Middle 68% &mdash; {html_mod.escape(loc_label)}-specific data"
         rows_html += render_band_row(lbl, desc, tc, tbg, la, lo_s, hi_s, avg_s, curr, unit, pills, sig_n)
 
     st.markdown(rows_html, unsafe_allow_html=True)
@@ -908,6 +940,7 @@ with st.sidebar:
                 "annual_usd": dp.get("annual_usd"),
                 "val_min_usd": dp.get("value_min_usd"),
                 "val_max_usd": dp.get("value_max_usd"),
+                "loc": dp.get("location_specificity", "?"),
                 "original": dp.get("original_value", ""),
                 "label": dp.get("label", ""),
                 "conf": dp.get("confidence", ""),
