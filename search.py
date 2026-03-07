@@ -1,11 +1,12 @@
 """
 search.py -- Web search strategy for Job Rate Finder
-Runs SerpAPI queries for maximum source coverage.
+Runs SerpAPI queries in parallel for maximum source coverage with minimal latency.
 """
 
 from __future__ import annotations
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
 from utils import (
@@ -20,8 +21,8 @@ from utils import (
     secret,
     source_quality,
 )
-_CURRENT_YEAR = datetime.date.today().year
 
+_CURRENT_YEAR = datetime.date.today().year
 
 # Salary-specific sites to query individually
 SALARY_SITES = [
@@ -38,6 +39,9 @@ SALARY_SITES = [
     "careerbliss.com",
     "salaryexpert.com",
 ]
+
+# Max parallel SerpAPI workers — balances speed vs rate limits
+_SERP_WORKERS = 8
 
 
 def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
@@ -80,6 +84,9 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
             f'"{core_job}" pay {loc_full}',
             f'"{core_job}" compensation {loc_full}',
             f'how much does a {core_job} make in {city}',
+            f'"{core_job}" salary {city} {state}',
+            f'site:glassdoor.com "{core_job}" salary {city}',
+            f'site:indeed.com "{core_job}" salary {city}',
         ]
 
     # -- State/region queries (if state provided) --
@@ -87,6 +94,9 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
         queries += [
             f'"{core_job}" salary {state}',
             f'"{core_job}" average pay {state} {country}',
+            f'"{core_job}" salary range {state}',
+            f'site:glassdoor.com "{core_job}" salary {state}',
+            f'site:indeed.com "{core_job}" salary {state}',
         ]
 
     # -- Site-specific queries for every major salary DB --
@@ -114,11 +124,40 @@ def build_queries(job: str, country: str, state: str, city: str) -> List[str]:
     return queries
 
 
+def _location_relevance_score(text: str, city: str, state: str) -> int:
+    """
+    Return a bonus score (0–15) if the text mentions the target city or state.
+    Used to up-rank sources that are clearly location-specific.
+    """
+    if not text:
+        return 0
+    tl = text.lower()
+    score = 0
+    if city and city.lower() in tl:
+        score += 15
+    elif state and state.lower() in tl:
+        score += 8
+    return score
+
+
+def _fetch_one(q: str, key: str, gl: str, hl: str) -> tuple[str, list]:
+    """Fetch one SerpAPI query. Returns (query, organic_results)."""
+    try:
+        params = {"engine": "google", "q": q, "api_key": key, "num": 10}
+        if gl:
+            params["gl"] = gl
+            params["hl"] = hl
+        r = http_get(SERPAPI_URL, params=params, timeout=20)
+        r.raise_for_status()
+        return q, (r.json().get("organic_results") or [])
+    except Exception:
+        return q, []
+
+
 def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
     """
-    Execute all SerpAPI queries and return deduplicated, quality-scored results.
+    Execute all SerpAPI queries in parallel and return deduplicated, quality-scored results.
     Collects up to MAX_SEARCH_RESULTS unique sources.
-    Enriches query list with plan["query_strategies"] and plan["target_sites"] when provided.
     """
     key = secret("SERPAPI_API_KEY")
     queries = build_queries(job, country, state, city)
@@ -130,7 +169,7 @@ def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = 
         try:
             queries.append(tmpl.format(job=job, location=location))
         except KeyError:
-            pass  # skip templates with unknown placeholders
+            pass
 
     # ── Append planner target sites not already in SALARY_SITES ──
     existing_site_set = set(SALARY_SITES)
@@ -138,62 +177,74 @@ def _search_serpapi(job: str, country: str, state: str, city: str, plan: dict = 
         if site not in existing_site_set:
             queries.append(f'site:{site} "{job}" salary')
 
+    # Deduplicate queries while preserving order
+    seen_q: set = set()
+    unique_queries: List[str] = []
+    for q in queries:
+        if q not in seen_q:
+            seen_q.add(q)
+            unique_queries.append(q)
+
+    # ── Parallel fetch — all queries fire concurrently ──
+    all_items: List[tuple[str, dict]] = []  # (query, item)
+    with ThreadPoolExecutor(max_workers=_SERP_WORKERS) as pool:
+        futures = {pool.submit(_fetch_one, q, key, gl, hl): q for q in unique_queries}
+        for future in as_completed(futures, timeout=90):
+            try:
+                q, items = future.result(timeout=25)
+                for item in items:
+                    all_items.append((q, item))
+            except Exception:
+                continue
+
+    # ── Serial deduplication + scoring ──
     results: List[Dict] = []
     seen_urls: set = set()
     seen_hosts_count: Dict[str, int] = {}
-    failed_queries = 0
 
-    for q in queries:
+    for q, item in all_items:
         if len(results) >= MAX_SEARCH_RESULTS:
             break
-        if failed_queries > 5:
-            break
-        try:
-            params = {"engine": "google", "q": q, "api_key": key, "num": 10}
-            if gl:
-                params["gl"] = gl
-                params["hl"] = hl
-            r = http_get(SERPAPI_URL, params=params)
-            r.raise_for_status()
-            data = r.json()
 
-            for item in data.get("organic_results") or []:
-                url = (item.get("link") or "").strip()
-                if not url or not url.startswith("http"):
-                    continue
-                if is_blocked(url):
-                    continue
-                if url in seen_urls:
-                    continue
-
-                h = host_of(url)
-                host_count = seen_hosts_count.get(h, 0)
-                if host_count >= 6:
-                    continue
-
-                seen_urls.add(url)
-                seen_hosts_count[h] = host_count + 1
-
-                results.append({
-                    "url": url,
-                    "title": (item.get("title") or "")[:200],
-                    "snippet": (item.get("snippet") or "")[:500],
-                    "host": h,
-                    "quality": source_quality(url),
-                    "query": q[:80],
-                })
-
-        except Exception:
-            failed_queries += 1
+        url = (item.get("link") or "").strip()
+        if not url or not url.startswith("http"):
+            continue
+        if is_blocked(url):
+            continue
+        if url in seen_urls:
             continue
 
+        h = host_of(url)
+        if seen_hosts_count.get(h, 0) >= 6:
+            continue
+
+        seen_urls.add(url)
+        seen_hosts_count[h] = seen_hosts_count.get(h, 0) + 1
+
+        snippet = (item.get("snippet") or "")[:500]
+        title   = (item.get("title") or "")[:200]
+
+        # Location-relevance bonus — boosts city/state-specific sources
+        loc_bonus = _location_relevance_score(snippet + " " + title, city, state)
+        base_quality = source_quality(url)
+
+        results.append({
+            "url": url,
+            "title": title,
+            "snippet": snippet,
+            "host": h,
+            "quality": base_quality + loc_bonus,
+            "query": q[:80],
+        })
+
+    # Sort: quality desc, then snippet length (more text = more data for Claude)
     results.sort(key=lambda x: (x["quality"], len(x.get("snippet", ""))), reverse=True)
     return results
 
 
 def search_web(job: str, country: str, state: str, city: str, plan: dict = {}) -> List[Dict[str, Any]]:
     """
-    Run SerpAPI queries and return deduplicated, quality-sorted results.
+    Run SerpAPI queries in parallel and return deduplicated, quality-sorted results.
     Accepts an optional SearchPlan dict from site_planner to enrich queries.
     """
     return _search_serpapi(job, country, state, city, plan)
