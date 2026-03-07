@@ -349,7 +349,6 @@ def compute_stats(
     data_table: List[Dict],
     ai_min: Optional[float] = None,
     ai_max: Optional[float] = None,
-    sigma1_table: Optional[List[Dict]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Compute empirical percentile sigma ranges from a data_table (List[Dict]).
@@ -357,17 +356,13 @@ def compute_stats(
     Each row must have an "annual_usd" key. Two-pass outlier removal:
       1. Standard IQR (1.5×) to remove extreme statistical outliers.
       2. AI-range sanity check: if Claude gave a recommended range, also remove
-         points that are > 3× the AI max or < 1/4 the AI min — these are almost
-         certainly wrong-country or wrong-job data that slipped through.
+         points that are > 3× the AI max or < 1/4 the AI min.
 
-    sigma1 (Typical, ~68%): computed from sigma1_table if provided and large enough
-      (≥4 rows), otherwise falls back to the full cleaned dataset. This allows
-      callers to pass location-specific data for sigma1 while sigma2 uses all data.
+    Both sigma1 and sigma2 are computed from the SAME cleaned dataset, which
+    guarantees sigma1 ⊆ sigma2 at all times.
 
-    sigma2 (Full Range, ~95%): always computed from the full cleaned dataset.
-
-    Sigma boundaries are actual observed list values (percentile-indexed), NOT
-    stdev-derived. Returns None if fewer than 2 values survive filtering.
+    Sigma boundaries are actual observed list values (nearest-rank percentile),
+    NOT stdev-derived. Returns None if fewer than 2 values survive filtering.
     """
     values = [
         float(row["annual_usd"])
@@ -394,8 +389,6 @@ def compute_stats(
             sorted_vals = filtered
 
     # ── Pass 2: AI-range sanity check ──
-    # Generous bounds (0.25× AI min → 3× AI max) catch wrong-country/job data
-    # that IQR alone can't detect (e.g., nationwide US data in a Brazil search).
     if ai_min and ai_max and ai_min > 0 and ai_max > 0:
         sanity_lo = ai_min * 0.25
         sanity_hi = ai_max * 3.0
@@ -410,53 +403,30 @@ def compute_stats(
     mean   = statistics.mean(sorted_vals)
     median = statistics.median(sorted_vals)
 
-    # ── sigma1: use location-specific subset if available and sufficient ──
-    # This makes sigma1 (Typical) represent the location the user asked for,
-    # not a blend of nationwide + local data.
-    s1_candidates = (
-        [float(r["annual_usd"]) for r in (sigma1_table or [])
-         if isinstance(r.get("annual_usd"), (int, float)) and r["annual_usd"] > 0]
-    )
-    # Also run the same outlier filters on the sigma1 subset for consistency
-    if len(s1_candidates) >= 4:
-        s1_sorted = sorted(s1_candidates)
-        # Apply AI sanity bounds to sigma1 subset too
-        if ai_min and ai_max and ai_min > 0 and ai_max > 0:
-            s1_sorted = [v for v in s1_sorted if (ai_min * 0.25) <= v <= (ai_max * 3.0)] or s1_sorted
-        s1_vals = s1_sorted if len(s1_sorted) >= 2 else sorted_vals
-    else:
-        s1_vals = sorted_vals
-
-    s1_n = len(s1_vals)
-
-    # ── Empirical percentile sigma bands (correct nearest-rank formula) ──
-    sigma1_lo = s1_vals[_pct_idx(0.16, s1_n)]
-    sigma1_hi = s1_vals[_pct_idx(0.84, s1_n)]
-
+    # ── Empirical percentile sigma bands — same dataset, sigma1 ⊆ sigma2 guaranteed ──
+    sigma1_lo = sorted_vals[_pct_idx(0.16,  n)]
+    sigma1_hi = sorted_vals[_pct_idx(0.84,  n)]
     sigma2_lo = sorted_vals[_pct_idx(0.025, n)]
     sigma2_hi = sorted_vals[_pct_idx(0.975, n)]
-
     sigma3_lo = sorted_vals[0]
     sigma3_hi = sorted_vals[-1]
 
-    def _count_in(vals, lo, hi):
-        return sum(1 for v in vals if lo <= v <= hi)
+    def _count_in(lo, hi):
+        return sum(1 for v in sorted_vals if lo <= v <= hi)
 
     return {
-        "mean": mean,
-        "median": median,
-        "min": sorted_vals[0],
-        "max": sorted_vals[-1],
-        "count": n,
-        "count_raw": count_raw,
-        "sigma1": (sigma1_lo, sigma1_hi),
-        "sigma2": (sigma2_lo, sigma2_hi),
-        "sigma3": (sigma3_lo, sigma3_hi),
-        "sigma1_count": _count_in(s1_vals, sigma1_lo, sigma1_hi),
-        "sigma2_count": _count_in(sorted_vals, sigma2_lo, sigma2_hi),
+        "mean":         mean,
+        "median":       median,
+        "min":          sorted_vals[0],
+        "max":          sorted_vals[-1],
+        "count":        n,
+        "count_raw":    count_raw,
+        "sigma1":       (sigma1_lo, sigma1_hi),
+        "sigma2":       (sigma2_lo, sigma2_hi),
+        "sigma3":       (sigma3_lo, sigma3_hi),
+        "sigma1_count": _count_in(sigma1_lo, sigma1_hi),
+        "sigma2_count": _count_in(sigma2_lo, sigma2_hi),
         "sigma3_count": n,
-        # Expose whether sigma1 came from a location-specific subset
-        "sigma1_location_specific": len(s1_candidates) >= 4,
     }
 
 
