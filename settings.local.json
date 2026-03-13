@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"color\\\\|background\\\\|style\\\\|css\\\\|theme\" \"/c/Users/samki/Downloads/Job Rate Agent\" --include=\"*.py\" --include=\"*.json\" 2>/dev/null | head -30)",
+      "Bash(wc -l \"/c/Users/samki/Downloads/Job Rate Agent\"/utils/*.py)"
+    ]
+  }
+}
