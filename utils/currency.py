@@ -1,15 +1,15 @@
 import requests
 
-EXCHANGERATE_BASE = "https://api.exchangerate.host/convert"
+FRANKFURTER_BASE = "https://api.frankfurter.app/latest"
 
 
 def convert_currency(
     amount: float,
     from_code: str,
     to_code: str,
-    api_key: str,
+    api_key: str = "",  # unused — frankfurter.app requires no API key
 ) -> float | None:
-    """Convert amount from one currency to another using exchangerate.host."""
+    """Convert amount from one currency to another using frankfurter.app (ECB rates, no key needed)."""
 
     if from_code == to_code:
         return amount
@@ -21,19 +21,15 @@ def convert_currency(
         "from": from_code.upper(),
         "to": to_code.upper(),
         "amount": amount,
-        "access_key": api_key,
     }
 
     try:
-        resp = requests.get(EXCHANGERATE_BASE, params=params, timeout=10)
+        resp = requests.get(FRANKFURTER_BASE, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
-        if data.get("success") and data.get("result") is not None:
-            return float(data["result"])
-
-        # Some versions return 'result' directly without 'success' flag
-        result = data.get("result")
+        rates = data.get("rates", {})
+        result = rates.get(to_code.upper())
         if result is not None:
             return float(result)
 
@@ -41,10 +37,7 @@ def convert_currency(
         return None
 
     except requests.exceptions.HTTPError as e:
-        if e.response and e.response.status_code == 429:
-            print(f"[currency] Rate limited (429) for {from_code}->{to_code}")
-        else:
-            print(f"[currency] HTTP error for {from_code}->{to_code}: {e}")
+        print(f"[currency] HTTP error for {from_code}->{to_code}: {e}")
         return None
     except Exception as e:
         print(f"[currency] Error for {from_code}->{to_code}: {e}")
