@@ -9,6 +9,7 @@ from utils.serpapi_client import discover_top_sites, search_site
 from utils.jina_client import fetch_page
 from utils.claude_client import extract_salary, validate_rows_batch, generate_summary
 from utils.currency import convert_currency
+from utils.countries import get_country_currency
 
 HOURS_PER_YEAR = 2080
 
@@ -67,6 +68,10 @@ def run_pipeline(
         yield {"type": "error", "message": "No salary sites discovered. Check your SerpAPI key."}
         return
 
+    # Resolve the country's native currency once — used as a fallback when Claude
+    # extracts a pay number but fails to identify the currency code.
+    country_currency = get_country_currency(country)
+
     # Steps 2 & 3: Search + fetch per site, fast-fail if first URL blocked (10%-80%)
     source_pay_count = 0
     TARGET_SOURCE_PAY_COUNT = 50
@@ -117,7 +122,7 @@ def run_pipeline(
                 consecutive_no_data += 1
                 continue
 
-            extracted = extract_salary(page_text, job_title, country, region, city, client)
+            extracted = extract_salary(page_text, job_title, country, region, city, client, country_currency)
             row = _build_row(domain, url, extracted, job_title, country, region, city, display_currency)
             rows.append(row)
             yield {"type": "row", "row": row}
@@ -155,11 +160,22 @@ def run_pipeline(
         else:
             source_amount = row.get("found_hourly_pay")
 
-        if source_amount is None or not found_currency:
+        if source_amount is None:
             row["display_pay_rate"] = None
-            if not row.get("error_message") and not found_currency and source_amount is not None:
-                row["error_message"] = "Currency code missing — cannot convert"
             continue
+
+        if not found_currency:
+            # Fall back to the country's native currency rather than discarding valid pay data
+            inferred = country_currency
+            if inferred:
+                found_currency = inferred
+                row["found_currency"] = inferred
+                if not row.get("error_message"):
+                    row["error_message"] = f"Currency inferred from country ({inferred})"
+            else:
+                row["display_pay_rate"] = None
+                row["error_message"] = "Currency code missing — cannot convert"
+                continue
 
         if found_currency == display_currency:
             row["display_pay_rate"] = source_amount
