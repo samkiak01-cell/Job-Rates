@@ -2,6 +2,7 @@ import requests
 from typing import Optional
 
 SALARY_SITE_WHITELIST = {
+    # English-language / global
     "indeed.com", "glassdoor.com", "salary.com", "payscale.com",
     "dice.com", "ziprecruiter.com", "linkedin.com", "monster.com",
     "totaljobs.com", "reed.co.uk", "seek.com.au", "levels.fyi",
@@ -9,6 +10,46 @@ SALARY_SITE_WHITELIST = {
     "jobstreet.com", "naukri.com", "stepstone.de", "jobs.ch",
     "michaelpage.com", "roberthalf.com", "hays.com", "ambitionbox.com",
     "talent.com", "salaryexpert.com", "erieri.com", "jobsora.com",
+    # Poland
+    "pracuj.pl", "wynagrodzenia.pl", "nofluffjobs.com", "justjoin.it",
+    "praca.pl", "bulldogjob.pl", "dou.eu",
+    # Broader Europe
+    "stepstone.com", "jobijoba.com", "loonwijzer.nl", "jobted.com",
+    "glassdoor.fr", "glassdoor.de", "glassdoor.co.uk",
+    # Staffing / recruiters with salary guides
+    "adecco.com", "randstad.com", "manpower.com",
+}
+
+# Local-language salary keywords keyed by country name.
+# Used to build richer search queries for non-English markets.
+COUNTRY_SALARY_TERMS: dict[str, list[str]] = {
+    "Poland": ["wynagrodzenie", "zarobki"],
+    "Germany": ["gehalt", "lohn"],
+    "Austria": ["gehalt"],
+    "Switzerland": ["gehalt", "lohn"],
+    "France": ["salaire"],
+    "Belgium": ["salaire", "loon"],
+    "Netherlands": ["salaris", "loon"],
+    "Spain": ["salario", "sueldo"],
+    "Italy": ["stipendio"],
+    "Portugal": ["salário"],
+    "Brazil": ["salário"],
+    "Mexico": ["salario"],
+    "Czech Republic": ["plat", "mzda"],
+    "Slovakia": ["plat", "mzda"],
+    "Hungary": ["fizetés", "bér"],
+    "Romania": ["salariu"],
+    "Bulgaria": ["zaplate"],
+    "Ukraine": ["зарплата"],
+    "Russia": ["зарплата", "оклад"],
+    "Japan": ["給料", "年収"],
+    "China": ["薪资", "工资"],
+    "South Korea": ["연봉", "급여"],
+    "Turkey": ["maaş", "ücret"],
+    "Sweden": ["lön"],
+    "Norway": ["lønn"],
+    "Denmark": ["løn"],
+    "Finland": ["palkka"],
 }
 
 SERPAPI_BASE = "https://serpapi.com/search"
@@ -16,7 +57,9 @@ SERPAPI_BASE = "https://serpapi.com/search"
 
 def discover_top_sites(country: str, api_key: str) -> list[str]:
     """Discover top salary data sites for the given country using SerpAPI."""
-    query = f"top salary data job sites {country}"
+    local_terms = COUNTRY_SALARY_TERMS.get(country, [])
+    extra = f" {local_terms[0]}" if local_terms else ""
+    query = f"top salary data job sites {country}{extra}"
 
     params = {
         "engine": "google",
@@ -82,7 +125,16 @@ def search_site(
     """Search a specific site for salary pages matching the job criteria."""
     location_parts = [p for p in [city, region, country] if p]
     location_str = " ".join(location_parts)
-    query = f"site:{domain} {job_title} {location_str} salary"
+
+    # Build salary term clause: always include English plus any local-language terms
+    local_terms = COUNTRY_SALARY_TERMS.get(country, [])
+    all_salary_terms = ["salary"] + local_terms
+    if len(all_salary_terms) == 1:
+        salary_clause = "salary"
+    else:
+        salary_clause = "(" + " OR ".join(all_salary_terms) + ")"
+
+    query = f"site:{domain} {job_title} {location_str} {salary_clause}"
 
     params = {
         "engine": "google",
