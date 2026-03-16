@@ -106,8 +106,8 @@ def run_pipeline(
         for url in urls:
             if source_pay_count >= TARGET_SOURCE_PAY_COUNT:
                 break
-            if consecutive_no_data >= 3:
-                print(f"[pipeline] Skipping {domain}: 3 consecutive pulls with no pay data")
+            if consecutive_no_data >= 5:
+                print(f"[pipeline] Skipping {domain}: 5 consecutive pulls with no pay data")
                 break
 
             page_text, fetch_error = fetch_page(url)
