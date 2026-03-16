@@ -6,14 +6,14 @@ JINA_BASE = "https://r.jina.ai/"
 # Strings that indicate the page is a bot/auth wall, not real content
 _BLOCK_SIGNALS = [
     "403: Forbidden",
-    "Just a moment",
+    "Just a moment...",        # Cloudflare spinner — always includes the ellipsis
     "Additional Verification Required",
     "Enable JavaScript and cookies",
     "cf-browser-verification",
-    "Cloudflare",
-    "Access denied",
     "Robot or human?",
     "Please verify you are a human",
+    # "Cloudflare" removed — too broad, appears in legitimate site footers
+    # "Access denied" removed — too broad, appears in legitimate content
 ]
 
 _LOGIN_SIGNALS = [
