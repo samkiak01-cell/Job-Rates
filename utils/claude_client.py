@@ -26,30 +26,47 @@ def extract_salary(
     location_parts = [p for p in [city, region, country] if p]
     location_str = ", ".join(location_parts)
 
-    prompt = f"""Given this web page content from a salary data site, if the content is not in English, first translate it to English internally, then extract the MOST RELEVANT salary entry matching:
+    prompt = f"""Given this web page content from a salary data site, extract salary data matching:
 - Job Title: "{job_title}"
 - Location: {location_str}
+
+IMPORTANT INSTRUCTIONS:
+1. The page may be in any language. Translate mentally and extract regardless of language.
+2. Salary data often appears as tables, ranges, or survey results — not just single numbers.
+   - If you see a salary range (e.g. min/median/max or percentile bands), use the MEDIAN or AVERAGE as found_annual_pay.
+   - If only a range is present with no median, use the midpoint: (min + max) / 2.
+3. Look for any of these patterns as salary signals:
+   - Currency symbols (zł, PLN, €, £, $, ¥, kr, etc.) followed by numbers
+   - Local-language salary labels: wynagrodzenie, zarobki, gehalt, salaire, salario, stipendio, fizetés, etc.
+   - Columns labeled min/median/max, percentile ranges (P25/P50/P75), or survey averages
+4. Job title matching: accept the closest match if an exact match is not found.
+5. If the page shows salary data for multiple positions, pick the best matching one.
 
 Return ONLY valid JSON with this exact schema:
 {{
   "job_title_found": "string or null",
   "found_currency": "ISO 4217 code or null",
-  "found_annual_pay": "number or null",
-  "found_hourly_pay": "number or null",
+  "found_annual_pay": number_or_null,
+  "found_hourly_pay": number_or_null,
   "found_country": "string or null",
   "found_region": "string or null",
   "found_city": "string or null"
 }}
 
-If no salary data is found or the content is not salary-related, return all null values.
+CRITICAL for numeric fields:
+- found_annual_pay and found_hourly_pay MUST be plain JSON numbers (e.g. 53035, not "53,035" or "$53,035").
+- Strip all currency symbols, commas, and K/M suffixes before returning (e.g. "$53,035" → 53035, "45K" → 45000).
+- If no salary data is found, use JSON null (not the string "null").
+
+If absolutely no salary data is found, return all null values.
 
 Page content:
-{page_text[:10000]}"""
+{page_text[:15000]}"""
 
     try:
         response = client.messages.create(
             model=HAIKU_MODEL,
-            max_tokens=512,
+            max_tokens=1024,
             system=EXTRACTION_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -58,7 +75,8 @@ Page content:
         # Extract JSON from response (handle markdown code blocks)
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            result = json.loads(json_match.group())
+            return _coerce_numeric_fields(result)
         return _empty_extraction()
 
     except (json.JSONDecodeError, Exception) as e:
@@ -206,6 +224,45 @@ Return ONLY valid JSON."""
     except Exception as e:
         print(f"[claude] generate_summary error: {e}")
         return _empty_summary()
+
+
+def _coerce_numeric_fields(data: dict) -> dict:
+    """
+    Ensure found_annual_pay and found_hourly_pay are floats (or None).
+    Claude occasionally returns formatted strings like "$53,035" or "45K"
+    even when instructed not to — this strips those artefacts defensively.
+    """
+    for field in ("found_annual_pay", "found_hourly_pay"):
+        val = data.get(field)
+        if val is None:
+            continue
+        if isinstance(val, (int, float)):
+            data[field] = float(val)
+            continue
+        if isinstance(val, str):
+            # Strip currency symbols, spaces, commas
+            cleaned = re.sub(r"[^\d.]", "", val.replace(",", ""))
+            # Handle K / M suffixes before stripping (e.g. "45K" → "45000")
+            val_upper = val.upper().strip()
+            if val_upper.endswith("K"):
+                cleaned = re.sub(r"[^\d.]", "", val_upper[:-1])
+                try:
+                    data[field] = float(cleaned) * 1_000
+                    continue
+                except ValueError:
+                    pass
+            elif val_upper.endswith("M"):
+                cleaned = re.sub(r"[^\d.]", "", val_upper[:-1])
+                try:
+                    data[field] = float(cleaned) * 1_000_000
+                    continue
+                except ValueError:
+                    pass
+            try:
+                data[field] = float(cleaned) if cleaned else None
+            except ValueError:
+                data[field] = None
+    return data
 
 
 def _empty_extraction() -> dict:
