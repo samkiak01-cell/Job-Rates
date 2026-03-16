@@ -20,15 +20,18 @@ def extract_salary(
     region: str,
     city: str,
     client: anthropic.Anthropic,
+    country_currency: str | None = None,
 ) -> dict:
     """Extract salary data from a page using Claude Haiku."""
 
     location_parts = [p for p in [city, region, country] if p]
     location_str = ", ".join(location_parts)
 
+    currency_hint = f"\n- Expected local currency: {country_currency} (use this if no other currency is clearly indicated on the page)" if country_currency else ""
+
     prompt = f"""Given this web page content from a salary data site, extract salary data matching:
 - Job Title: "{job_title}"
-- Location: {location_str}
+- Location: {location_str}{currency_hint}
 
 IMPORTANT INSTRUCTIONS:
 1. The page may be in any language. Translate mentally and extract regardless of language.
@@ -72,6 +75,7 @@ Page content:
         )
 
         content = response.content[0].text.strip()
+        print(f"[claude] extract_salary raw: {content[:300]}")
         # Extract JSON from response (handle markdown code blocks)
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
@@ -226,12 +230,52 @@ Return ONLY valid JSON."""
         return _empty_summary()
 
 
+# Maps common currency names / symbols → ISO 4217 codes
+_CURRENCY_NAME_MAP = {
+    "złoty": "PLN", "zloty": "PLN", "zł": "PLN", "zl": "PLN",
+    "euro": "EUR", "€": "EUR",
+    "dollar": "USD", "dollars": "USD", "usd": "USD", "$": "USD",
+    "pound": "GBP", "pounds": "GBP", "sterling": "GBP", "£": "GBP",
+    "franc": "CHF", "francs": "CHF", "chf": "CHF",
+    "forint": "HUF", "ft": "HUF",
+    "koruna": "CZK", "kč": "CZK", "czk": "CZK",
+    "leu": "RON", "lei": "RON", "ron": "RON",
+    "kuna": "HRK", "hrk": "HRK",
+    "ruble": "RUB", "rubles": "RUB", "руб": "RUB",
+    "hryvnia": "UAH", "₴": "UAH",
+    "krona": "SEK", "kronor": "SEK", "sek": "SEK",
+    "krone": "NOK", "nok": "NOK",
+    "krone": "DKK", "dkk": "DKK",
+    "yen": "JPY", "¥": "JPY",
+    "yuan": "CNY", "renminbi": "CNY", "rmb": "CNY",
+    "rupee": "INR", "rupees": "INR", "₹": "INR",
+    "real": "BRL", "reais": "BRL", "brl": "BRL",
+    "peso": "MXN", "mxn": "MXN",
+    "won": "KRW", "₩": "KRW",
+    "ringgit": "MYR", "myr": "MYR",
+    "baht": "THB", "thb": "THB",
+    "lira": "TRY", "try": "TRY",
+    "dirham": "AED", "aed": "AED",
+    "riyal": "SAR", "sar": "SAR",
+}
+
+
 def _coerce_numeric_fields(data: dict) -> dict:
     """
     Ensure found_annual_pay and found_hourly_pay are floats (or None).
     Claude occasionally returns formatted strings like "$53,035" or "45K"
     even when instructed not to — this strips those artefacts defensively.
     """
+    # Normalize found_currency: map common names/symbols to ISO 4217
+    currency = data.get("found_currency")
+    if currency and isinstance(currency, str):
+        normalized = _CURRENCY_NAME_MAP.get(currency.strip().lower())
+        if normalized:
+            data["found_currency"] = normalized
+        else:
+            # Already looks like an ISO code — just uppercase and strip
+            data["found_currency"] = currency.strip().upper()
+
     for field in ("found_annual_pay", "found_hourly_pay"):
         val = data.get(field)
         if val is None:
