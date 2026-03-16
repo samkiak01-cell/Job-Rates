@@ -35,6 +35,12 @@ def fetch_page(url: str) -> tuple[str | None, str | None]:
     headers = {
         "Accept": "text/plain",
         "User-Agent": "Mozilla/5.0 (compatible; myBasePay-JobRateAgent/1.0)",
+        # Allow up to 30 s for JS-rendered salary pages to fully load
+        "X-Timeout": "30",
+        # Return clean markdown so tables are preserved
+        "X-Return-Format": "markdown",
+        # Skip image alt-text to save token budget for actual salary content
+        "X-With-Images-Summary": "false",
     }
 
     try:
@@ -75,7 +81,7 @@ def fetch_page(url: str) -> tuple[str | None, str | None]:
             print(f"[jina] {msg}: {url}")
             return None, msg
 
-        return text[:12000], None
+        return text[:20000], None
 
     except requests.exceptions.Timeout:
         msg = "Request timed out (>15s)"
