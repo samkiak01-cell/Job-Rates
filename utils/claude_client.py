@@ -12,15 +12,30 @@ VALIDATION_SYSTEM = """You are a job title and location matching expert. Determi
 
 SUMMARY_SYSTEM = """You are a compensation market expert for myBasePay, a professional salary benchmarking platform. Provide accurate, helpful market intelligence."""
 
+# CHANGE 8: Module-level extraction failure log
+_extraction_failures: list[dict] = []
+
 
 def _build_extraction_prompt(
     job_title: str,
     location_str: str,
     currency_hint: str,
     page_text: str,
+    source_type: str | None = None,  # CHANGE 3
 ) -> str:
     """Build the extraction prompt for a first-pass salary extraction."""
-    return f"""Given this web page content from a salary data site, extract salary data matching:
+    # CHANGE 3: Build source hint block
+    source_hint = ""
+    if source_type == "job_board":
+        source_hint = "SOURCE TYPE: Job board listing. Salary typically appears as a range '$X.XX - $Y.YY per hour' or '$X,000 - $Y,000/year' near the job title or in a compensation/pay section. Extract the full range.\n\n"
+    elif source_type == "salary_database":
+        source_hint = "SOURCE TYPE: Salary database. Data appears in tables with min/median/max columns or percentile bands. Use the median or average as the primary figure.\n\n"
+    elif source_type == "government":
+        source_hint = "SOURCE TYPE: Government wage database (BLS/O*NET). Mean and median annual wages are explicitly listed. These are highly reliable — mark confidence 'high'.\n\n"
+    elif source_type == "aggregator":
+        source_hint = "SOURCE TYPE: Salary aggregator (crowdsourced or employer-reported). Extract the most prominent figure for the specific job title shown.\n\n"
+
+    return f"""{source_hint}Given this web page content from a salary data site, extract salary data matching:
 - Job Title: "{job_title}"
 - Location: {location_str}{currency_hint}
 
@@ -36,6 +51,20 @@ IMPORTANT INSTRUCTIONS:
 4. Job title matching: accept the closest match if an exact match is not found.
 5. If the page shows salary data for multiple positions, pick the best matching one.
 
+SPECIAL PATTERNS — JOB BOARD FORMAT:
+Many salary pages are job board listings. Look for ALL of these patterns:
+1. Range next to title: "Nursing Coordinator  $38.46 - $63.46 per hour"
+   → found_pay_low=38.46, found_pay_high=63.46, found_hourly_pay=51.0 (midpoint)
+2. Metadata lines: "Salary: $75,000-$95,000" or "Pay: $45/hr" or "Compensation: $80K-$110K annually"
+   → Extract range into found_pay_low and found_pay_high
+3. Table columns: min/avg/max or P25/P50/P75 → found_pay_low=min, found_annual_pay=avg/P50, found_pay_high=max
+4. JSON-LD structured data: {{"@type": "JobPosting", "baseSalary": {{"minValue": 38.46, "maxValue": 63.46}}}}
+   → found_pay_low=minValue, found_pay_high=maxValue
+5. Remote/nationwide posting (location says "Remote", "United States", "Nationwide", "Work from Home")
+   → Set remote_ok=1 AND still extract the salary
+CRITICAL: A salary figure does NOT need to appear in a sentence. "$38.46-$63.46/hr" anywhere
+near a matching job title IS valid salary data — extract it.
+
 DO NOT EXTRACT:
 - Cost-of-living indices, purchasing power indices, or similar non-salary metrics.
 - Benefit values, bonus caps, signing bonuses, or equity/stock grants — only BASE SALARY figures.
@@ -47,6 +76,9 @@ Return ONLY valid JSON with this exact schema:
   "found_currency": "ISO 4217 code or null",
   "found_annual_pay": number_or_null,
   "found_hourly_pay": number_or_null,
+  "found_pay_low": number_or_null,
+  "found_pay_high": number_or_null,
+  "remote_ok": 0_or_1,
   "found_country": "string or null",
   "found_region": "string or null",
   "found_city": "string or null",
@@ -55,7 +87,7 @@ Return ONLY valid JSON with this exact schema:
 }}
 
 Confidence guidelines:
-- "high": salary figure is explicitly stated on the page for a matching job title.
+- "high": salary figure is explicitly stated on the page for a matching job title, or when source_type is 'government' and figures are explicitly stated.
 - "medium": salary was inferred from a range (midpoint) or the job title was a close but not exact match.
 - "low": salary is estimated, ambiguous, or the page data is unclear.
 
@@ -94,6 +126,14 @@ Review the page content below and either:
 
 Return the same JSON schema as the first attempt. Set confidence to your own assessment.
 
+TARGETED SEARCH INSTRUCTION:
+Before finalizing your answer, systematically scan the page for:
+1. ANY occurrence of "$", "£", "€", "¥" followed by a number
+2. ANY number followed by "/hr", "/hour", "/yr", "/year", "per hour", "per year", "annually"
+3. ANY JSON-LD block (in <script> tags) containing "salary", "baseSalary", "minValue", "maxValue"
+4. ANY table cell containing a number that looks like a wage
+Report what you find in your reasoning even if uncertain.
+
 Page content:
 {page_text[:15000]}"""
 
@@ -106,6 +146,7 @@ def extract_salary(
     city: str,
     client: anthropic.Anthropic,
     country_currency: str | None = None,
+    source_type: str | None = None,    # CHANGE 7
 ) -> dict:
     """Extract salary data from a page using Claude Haiku.
 
@@ -123,7 +164,8 @@ def extract_salary(
         else ""
     )
 
-    prompt = _build_extraction_prompt(job_title, location_str, currency_hint, page_text)
+    # CHANGE 7: Pass source_type to _build_extraction_prompt
+    prompt = _build_extraction_prompt(job_title, location_str, currency_hint, page_text, source_type)
 
     # --- First extraction call ---
     result = _call_haiku_extraction(client, prompt)
@@ -131,6 +173,19 @@ def extract_salary(
         return _empty_extraction()
 
     result = _coerce_numeric_fields(result)
+
+    # CHANGE 8: Log extraction failures after first-pass coercion
+    if result.get("found_annual_pay") is None and result.get("found_hourly_pay") is None:
+        _extraction_failures.append({
+            "job_title": job_title,
+            "source_type": source_type,
+            "text_snippet": page_text[:500],
+            "claude_reasoning": result.get("reasoning"),
+            "confidence": result.get("confidence"),
+        })
+        if len(_extraction_failures) > 100:
+            _extraction_failures.pop(0)
+        print(f"[claude] extraction failed: no pay found. reasoning={result.get('reasoning', 'none')[:100]}")
 
     # --- Retry-with-critique if confidence is low ---
     if result.get("confidence") == "low":
@@ -202,6 +257,7 @@ def validate_rows_batch(
     if not rows:
         return []
 
+    # CHANGE 9a: Add remote_ok field to rows_json serialization
     rows_json = json.dumps([
         {
             "idx": i,
@@ -209,6 +265,7 @@ def validate_rows_batch(
             "found_country": r.get("country", ""),
             "found_region": r.get("region", ""),
             "found_city": r.get("city", ""),
+            "remote_ok": r.get("remote_ok", 0),    # NEW
             "display_pay_rate": r.get("display_pay_rate"),
             "confidence": r.get("confidence", "medium"),
             "reasoning": r.get("reasoning", ""),
@@ -235,6 +292,7 @@ def validate_rows_batch(
     else:
         niche_note = ""
 
+    # CHANGE 9b: Updated validation prompt with location matching rules
     prompt = f"""For each result below, determine if it is a valid salary data point for the search criteria. Use semantic matching for job titles (related titles count as valid).
 
 Search criteria:
@@ -269,10 +327,25 @@ For LOW confidence rows (apply stricter checks):
 For MEDIUM confidence rows:
 - Apply the same rules as high confidence, but flag if the figure seems unusual compared to the batch
 
+IMPORTANT: Most salary data for a given country is nationally representative.
+A nurse salary from Massachusetts is valid market data for a California nursing search.
+Do not over-reject on geography — only reject cross-country mismatches.
+
 General rules:
 - valid=0 if display_pay_rate is null
 - valid=0 if job title is completely unrelated
-- Use validation_reason values like: "plausible range", "mismatched job title", "outlier", "currency ambiguous", "low confidence unverified", "null pay rate", "location mismatch"
+
+LOCATION MATCHING RULES:
+- valid=0 ONLY if found_country is a COMPLETELY DIFFERENT COUNTRY from the search country
+  (e.g. reject UK salary data when searching for US data, reject German data for Canadian search)
+- valid=1 if found_country matches the search country OR if found_country is null/empty
+- valid=1 if remote_ok=1, regardless of region or city — remote jobs represent valid national market data
+- valid=1 if found_region is a different state/province than searched
+  (e.g. Massachusetts salary data is VALID for a California search — do NOT reject for state mismatch)
+- Only use validation_reason="location mismatch" when data is explicitly from a different country
+
+Use validation_reason values like: "plausible range", "mismatched job title", "outlier",
+"currency ambiguous", "low confidence unverified", "null pay rate", "location mismatch (wrong country)"
 """
 
     try:
@@ -418,12 +491,16 @@ _CURRENCY_NAME_MAP = {
 
 def _coerce_numeric_fields(data: dict) -> dict:
     """
-    Ensure found_annual_pay and found_hourly_pay are floats (or None).
+    Ensure found_annual_pay, found_hourly_pay, found_pay_low, and found_pay_high
+    are floats (or None).
     Claude occasionally returns formatted strings like "$53,035" or "45K"
     even when instructed not to — this strips those artefacts defensively.
 
-    Also strips implausibly small (< 1,000) or large (> 10,000,000) values,
+    Also strips implausibly small or large values,
     logging extraction errors via an '_error' key on the dict.
+
+    After coercing range fields, auto-computes midpoint into primary pay fields
+    if they are missing.
     """
     # Normalize found_currency: map common names/symbols to ISO 4217
     currency = data.get("found_currency")
@@ -483,6 +560,77 @@ def _coerce_numeric_fields(data: dict) -> dict:
             existing_error = data.get("_error", "")
             data["_error"] = (existing_error + "; " + error_msg).lstrip("; ")
 
+    # CHANGE 2: Coerce range fields (found_pay_low, found_pay_high)
+    for field in ("found_pay_low", "found_pay_high"):
+        val = data.get(field)
+        if val is None:
+            continue
+        if isinstance(val, (int, float)):
+            data[field] = float(val)
+        elif isinstance(val, str):
+            # Handle K / M suffixes before stripping (e.g. "45K" → "45000")
+            val_upper = val.upper().strip()
+            if val_upper.endswith("K"):
+                cleaned = re.sub(r"[^\d.]", "", val_upper[:-1])
+                try:
+                    data[field] = float(cleaned) * 1_000
+                except ValueError:
+                    data[field] = None
+                    continue
+            elif val_upper.endswith("M"):
+                cleaned = re.sub(r"[^\d.]", "", val_upper[:-1])
+                try:
+                    data[field] = float(cleaned) * 1_000_000
+                except ValueError:
+                    data[field] = None
+                    continue
+            else:
+                # Strip currency symbols, spaces, commas
+                cleaned = re.sub(r"[^\d.]", "", val.replace(",", ""))
+                try:
+                    data[field] = float(cleaned) if cleaned else None
+                except ValueError:
+                    data[field] = None
+                    continue
+
+        # Plausibility check using BOTH thresholds based on magnitude
+        numeric_val = data.get(field)
+        if numeric_val is not None:
+            # Use value magnitude to infer hourly vs annual context
+            if numeric_val < 500:
+                # Likely hourly — check against hourly range
+                min_val, max_val = (1.0, 10_000)
+            else:
+                # Likely annual — check against annual range
+                min_val, max_val = (1_000, 10_000_000)
+            if numeric_val < min_val or numeric_val > max_val:
+                range_str = f"[{min_val} – {max_val:,}]"
+                error_msg = (
+                    f"{field} value {numeric_val} is outside plausible range "
+                    f"{range_str}; stripped to null"
+                )
+                print(f"[claude] extraction error: {error_msg}")
+                data[field] = None
+                existing_error = data.get("_error", "")
+                data["_error"] = (existing_error + "; " + error_msg).lstrip("; ")
+
+    # Auto-compute midpoint from range if primary fields are missing
+    low = data.get("found_pay_low")
+    high = data.get("found_pay_high")
+    if low is not None and high is not None:
+        # Swap if inverted
+        if low > high:
+            data["found_pay_low"], data["found_pay_high"] = high, low
+            low, high = high, low
+        midpoint = (low + high) / 2
+        # Infer hourly vs annual: if both bounds < 500 it's likely hourly
+        if low < 500:
+            if data.get("found_hourly_pay") is None:
+                data["found_hourly_pay"] = round(midpoint, 2)
+        else:
+            if data.get("found_annual_pay") is None:
+                data["found_annual_pay"] = round(midpoint, 2)
+
     return data
 
 
@@ -492,6 +640,9 @@ def _empty_extraction() -> dict:
         "found_currency": None,
         "found_annual_pay": None,
         "found_hourly_pay": None,
+        "found_pay_low": None,      # lower bound of salary range
+        "found_pay_high": None,     # upper bound of salary range
+        "remote_ok": 0,             # 1 if remote/national posting
         "found_country": None,
         "found_region": None,
         "found_city": None,
@@ -516,3 +667,8 @@ def _empty_summary() -> dict:
             "justification": "Insufficient data to provide recommendation.",
         },
     }
+
+
+def get_extraction_failures() -> list[dict]:
+    """Return a copy of recent extraction failures for debugging."""
+    return list(_extraction_failures)

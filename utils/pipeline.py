@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import pathlib
 import time
 import uuid
 import pandas as pd
@@ -9,7 +11,7 @@ from typing import Generator, Any
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import anthropic
 
-from utils.serpapi_client import discover_top_sites, search_site, classify_job_niche
+from utils.serpapi_client import discover_top_sites, search_site, classify_job_niche, get_source_type, SALARY_SITE_WHITELIST, INDUSTRY_VERTICAL_SOURCES
 from utils.jina_client import fetch_page
 from utils.claude_client import extract_salary, validate_rows_batch, generate_summary
 from utils.currency import convert_currency
@@ -23,8 +25,6 @@ DOMAIN_WALL_CLOCK_TIMEOUT = 90  # seconds for the entire domain block
 # Domains that consistently return Cloudflare blocks, have no salary data,
 # or are geographically irrelevant to most searches — skip entirely.
 FETCH_BLOCKLIST = {
-    "ziprecruiter.com",   # Cloudflare-walled for Jina
-    "simplyhired.com",    # Cloudflare-walled for Jina
     "reddit.com",         # Cloudflare-walled for Jina
     "glassdoor.de",       # Cloudflare-walled for Jina
     "glassdoor.fr",       # Cloudflare-walled for Jina
@@ -50,15 +50,41 @@ SCHEMA = [
     "found_currency",
     "found_annual_pay",
     "found_hourly_pay",
+    "found_pay_low",
+    "found_pay_high",
     "display_currency",
     "display_pay_rate",
     "country",
     "region",
     "city",
+    "remote_ok",
+    "source_type",
     "valid",
     "error_message",
     "validation_reason",
 ]
+
+# File-based result cache
+CACHE_DIR = pathlib.Path("pipeline_cache")
+CACHE_TTL_HOURS = 24
+MAX_LOG_ENTRIES = 50
+LOG_FILE = "pipeline_run_log.json"
+
+# Bail-out limits differentiated by failure type
+BAIL_LIMITS = {
+    "wall": 2,      # Stop domain quickly on confirmed walls
+    "network": 3,   # Moderate patience for network issues
+    "no_data": 4,   # Current default for pages with no salary data
+    "default": 4,
+}
+
+# Minimum valid data points floor (raised from 14 to 20)
+MINIMUM_VALID_FLOOR = 20
+MINIMUM_VALID_FLOOR_DOMAINS = 15
+
+# Quality strategy switch: if less than 30% of extracted rows are valid after 10 domains, expand
+QUALITY_SWITCH_DOMAINS = 10
+QUALITY_SWITCH_THRESHOLD = 0.30
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +130,105 @@ def _build_summary_stub(valid_count: int, rejection_reasons: list[str]) -> dict:
     }
 
 
+def _get_cache_key(job_title: str, country: str, region: str) -> str:
+    normalized = f"{job_title.lower().strip()}|{country.lower()}|{region.lower()}"
+    return hashlib.md5(normalized.encode()).hexdigest()
+
+
+def _load_cache(cache_key: str) -> list[dict] | None:
+    CACHE_DIR.mkdir(exist_ok=True)
+    path = CACHE_DIR / f"{cache_key}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        age_hours = (time.time() - data.get("timestamp", 0)) / 3600
+        if age_hours > CACHE_TTL_HOURS:
+            print(f"[pipeline] Cache expired ({age_hours:.1f}h > {CACHE_TTL_HOURS}h): {cache_key}")
+            return None
+        print(f"[pipeline] Cache hit ({age_hours:.1f}h old): {cache_key}")
+        return data.get("rows", [])
+    except Exception as e:
+        print(f"[pipeline] Cache load error: {e}")
+        return None
+
+
+def _save_cache(cache_key: str, rows: list[dict]) -> None:
+    try:
+        CACHE_DIR.mkdir(exist_ok=True)
+        path = CACHE_DIR / f"{cache_key}.json"
+        path.write_text(
+            json.dumps({"timestamp": time.time(), "rows": rows}, default=str),
+            encoding="utf-8",
+        )
+        print(f"[pipeline] Cache saved: {cache_key} ({len(rows)} rows)")
+    except Exception as e:
+        print(f"[pipeline] Cache save error: {e}")
+
+
+def _append_log(log_entry: dict) -> None:
+    try:
+        path = pathlib.Path(LOG_FILE)
+        entries: list = []
+        if path.exists():
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(entries, list):
+                    entries = []
+            except Exception:
+                entries = []
+        entries.append(log_entry)
+        entries = entries[-MAX_LOG_ENTRIES:]
+        path.write_text(json.dumps(entries, indent=2, default=str), encoding="utf-8")
+    except Exception as e:
+        print(f"[pipeline] Log append error: {e}")
+
+
+def _classify_fetch_error(error_msg: str | None) -> str:
+    """Classify a fetch error message into wall / network / default."""
+    if not error_msg:
+        return "default"
+    if "WALL:" in error_msg:
+        return "wall"
+    if "NETWORK:" in error_msg:
+        return "network"
+    return "default"
+
+
+def _country_to_key(country: str) -> str:
+    mapping = {
+        "United States": "US", "USA": "US", "US": "US",
+        "United Kingdom": "UK", "UK": "UK", "Britain": "UK", "England": "UK",
+        "Germany": "DE", "Australia": "AU", "Canada": "CA",
+    }
+    return mapping.get(country, "GLOBAL")
+
+
+def _pre_sort_domains(domains: list[str], country: str, job_vertical: str | None) -> list[str]:
+    """Pre-sort domains before the main loop: high-priority sources first."""
+    country_key = _country_to_key(country)
+    high_priority = set(SALARY_SITE_WHITELIST.get(country_key, []))
+    vertical_priority = set(INDUSTRY_VERTICAL_SOURCES.get(job_vertical, [])) if job_vertical else set()
+    blocked = FETCH_BLOCKLIST
+
+    def domain_priority(d: str) -> int:
+        if d in blocked:
+            return 999
+        score = 50
+        if d in vertical_priority:
+            score -= 20
+        if d in high_priority:
+            score -= 10
+        stype = get_source_type(d)
+        if stype == "government":
+            score -= 8
+        elif stype == "salary_database":
+            score -= 5
+        return score
+
+    return sorted(domains, key=domain_priority)
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -137,186 +262,267 @@ def run_pipeline(
     domains_processed = 0
 
     # Classify job title niche before anything else — drives TARGET and search strategy
-    niche_level, title_variants = classify_job_niche(job_title)
+    niche_level, title_variants, job_vertical = classify_job_niche(job_title, anthropic_client=client)
     TARGET_SOURCE_PAY_COUNT = TARGET_BY_NICHE[niche_level]
-    print(f"[pipeline] Job niche: {niche_level} | TARGET={TARGET_SOURCE_PAY_COUNT} | variants={title_variants}")
+    print(f"[pipeline] Job niche: {niche_level} | TARGET={TARGET_SOURCE_PAY_COUNT} | variants={title_variants} | vertical={job_vertical}")
 
-    # Step 1: Discover top sites (5%)
-    yield {
-        "type": "progress",
-        "value": 0.05,
-        "text": (
-            f"Discovering top salary sites for {country} "
-            f"[{niche_level} title, target {TARGET_SOURCE_PAY_COUNT} data points]..."
-        ),
-    }
-
-    try:
-        sites = discover_top_sites(country, serpapi_key)
-    except Exception as e:
-        yield {"type": "error", "message": f"Site discovery failed: {e}"}
-        return
-
-    if not sites:
-        yield {"type": "error", "message": "No salary sites discovered. Check your SerpAPI key."}
-        return
-
-    # Resolve the country's native currency once — used as a fallback when Claude
-    # extracts a pay number but fails to identify the currency code.
-    country_currency = get_country_currency(country)
-
-    # Steps 2 & 3: Search + fetch per site (10%–80%)
-    source_pay_count = 0
-    # TARGET_SOURCE_PAY_COUNT is already set adaptively above based on niche_level
-
-    domain_yield: dict[str, dict] = {}  # domain -> {"valid_rows": int, "urls_fetched": int}
-    _force_continue = False  # overrides TARGET check when floor condition fires
-    seen_urls: set[str] = set()  # dedup — never fetch the same URL twice
-
-    def _fetch_and_extract(url: str) -> tuple:
-        """Fetch a single URL and run extraction. Returns (url, page_text, fetch_error, extracted)."""
-        page_text, fetch_error = fetch_page(url)
-        if not page_text:
-            return url, None, fetch_error, None
-        extracted = extract_salary(page_text, job_title, country, region, city, client, country_currency)
-        return url, page_text, None, extracted
-
-    # Work with a mutable list so we can reorder remaining domains at runtime.
-    sites_queue = list(sites)
-    i = 0
-
-    while i < len(sites_queue):
-        domain = sites_queue[i]
-
-        # Skip permanently blocked domains
-        if domain in FETCH_BLOCKLIST:
-            i += 1
-            continue
-
-        if (source_pay_count >= TARGET_SOURCE_PAY_COUNT) and not _force_continue:
-            break
-
-        progress = 0.10 + (min(i, len(sites)) / max(len(sites), 1)) * 0.70
+    # Cache check — if we have fresh results, skip discovery + fetch entirely
+    cache_key = _get_cache_key(job_title, country, region)
+    cached_rows = _load_cache(cache_key)
+    _from_cache = False
+    if cached_rows:
+        rows = [dict(r) for r in cached_rows]
+        _from_cache = True
         yield {
             "type": "progress",
-            "value": progress,
-            "text": f"Searching {domain} ({i+1}/{len(sites_queue)}, {source_pay_count}/{TARGET_SOURCE_PAY_COUNT} data points)...",
+            "value": 0.80,
+            "text": f"Loaded {len(rows)} cached results (< {CACHE_TTL_HOURS}h old) — recalculating...",
+        }
+
+    if not _from_cache:
+        # Step 1: Discover top sites (5%)
+        yield {
+            "type": "progress",
+            "value": 0.05,
+            "text": (
+                f"Discovering top salary sites for {country} "
+                f"[{niche_level} title, target {TARGET_SOURCE_PAY_COUNT} data points]..."
+            ),
         }
 
         try:
-            urls = search_site(domain, job_title, country, region, city, description, serpapi_key, title_variants or None)
+            sites = discover_top_sites(country, serpapi_key, job_vertical=job_vertical)
         except Exception as e:
-            print(f"[pipeline] search_site({domain}) error: {e}")
-            i += 1
-            domains_processed += 1
-            continue
+            yield {"type": "error", "message": f"Site discovery failed: {e}"}
+            return
 
-        if not urls:
-            i += 1
-            domains_processed += 1
-            continue
+        if not sites:
+            yield {"type": "error", "message": "No salary sites discovered. Check your SerpAPI key."}
+            return
 
-        # Deduplicate URLs — skip any already fetched this session
-        urls = [u for u in urls if u not in seen_urls]
+        # Resolve the country's native currency once — used as a fallback when Claude
+        # extracts a pay number but fails to identify the currency code.
+        country_currency = get_country_currency(country)
 
-        # Per-domain state
-        domain_had_valid = domain_yield.get(domain, {}).get("valid_rows", 0) > 0
-        bail_limit = 5 if domain_had_valid else 4  # stricter bail-out for untested domains
-        consecutive_no_data = 0
-        domain_valid_rows = 0
-        domain_urls_fetched = 0
-        domain_start_time = time.time()
+        # Steps 2 & 3: Search + fetch per site (10%–80%)
+        source_pay_count = 0
+        # TARGET_SOURCE_PAY_COUNT is already set adaptively above based on niche_level
 
-        # Process URLs in concurrent batches
-        url_idx = 0
-        while url_idx < len(urls):
+        domain_yield: dict[str, dict] = {}  # domain -> {"valid_rows": int, "urls_fetched": int}
+        _force_continue = False  # overrides TARGET check when floor condition fires
+        seen_urls: set[str] = set()  # dedup — never fetch the same URL twice
+
+        def _fetch_and_extract(url: str, src_type: str | None = None) -> tuple:
+            """Fetch a single URL and run extraction. Returns (url, page_text, fetch_error, extracted)."""
+            page_text, fetch_error = fetch_page(url)
+            if not page_text:
+                return url, None, fetch_error, None
+            extracted = extract_salary(page_text, job_title, country, region, city, client, country_currency, source_type=src_type)
+            return url, page_text, None, extracted
+
+        # Pre-sort domains before the main loop: high-priority sources first.
+        sites_queue = _pre_sort_domains(list(sites), country, job_vertical)
+        i = 0
+
+        while i < len(sites_queue):
+            domain = sites_queue[i]
+
+            # Skip permanently blocked domains
+            if domain in FETCH_BLOCKLIST:
+                i += 1
+                continue
+
             if (source_pay_count >= TARGET_SOURCE_PAY_COUNT) and not _force_continue:
                 break
-            if consecutive_no_data >= bail_limit:
-                print(f"[pipeline] Skipping {domain}: {bail_limit} consecutive pulls with no pay data")
-                break
 
-            # 90-second wall-clock timeout per domain
-            if time.time() - domain_start_time > DOMAIN_WALL_CLOCK_TIMEOUT:
-                yield {
-                    "type": "progress",
-                    "value": progress,
-                    "text": f"⏱ {domain} timed out (90s wall-clock), moving on",
-                }
-                break
+            progress = 0.10 + (min(i, len(sites)) / max(len(sites), 1)) * 0.70
+            yield {
+                "type": "progress",
+                "value": progress,
+                "text": f"Searching {domain} ({i+1}/{len(sites_queue)}, {source_pay_count}/{TARGET_SOURCE_PAY_COUNT} data points)...",
+            }
 
-            batch = urls[url_idx:url_idx + FETCH_BATCH_SIZE]
-            url_idx += FETCH_BATCH_SIZE
-            batch_results: list = [None] * len(batch)
+            try:
+                urls = search_site(domain, job_title, country, region, city, description, serpapi_key, title_variants or None)
+            except Exception as e:
+                print(f"[pipeline] search_site({domain}) error: {e}")
+                i += 1
+                domains_processed += 1
+                continue
 
-            with ThreadPoolExecutor(max_workers=FETCH_BATCH_SIZE) as executor:
-                future_to_idx = {
-                    executor.submit(_fetch_and_extract, url): idx
-                    for idx, url in enumerate(batch)
-                }
-                for future, idx in future_to_idx.items():
-                    try:
-                        batch_results[idx] = future.result(timeout=URL_FETCH_TIMEOUT)
-                    except FuturesTimeoutError:
-                        batch_results[idx] = (
-                            batch[idx], None,
-                            _make_error("fetch", "URL fetch timed out (35s)"),
-                            None,
-                        )
-                    except Exception as e:
-                        batch_results[idx] = (
-                            batch[idx], None,
-                            _make_error("fetch", str(e)),
-                            None,
-                        )
+            if not urls:
+                i += 1
+                domains_processed += 1
+                continue
 
-            # Yield results in original URL order
-            for result in batch_results:
-                if result is None:
-                    continue
-                url, page_text, fetch_error, extracted = result
-                seen_urls.add(url)
-                urls_fetched += 1
-                domain_urls_fetched += 1
+            # Deduplicate URLs — skip any already fetched this session
+            urls = [u for u in urls if u not in seen_urls]
 
-                if page_text is None:
-                    row = _empty_row(domain, url, display_currency, fetch_error)
-                    rows.append(row)
-                    yield {"type": "row", "row": row}
-                    consecutive_no_data += 1
-                else:
-                    row = _build_row(domain, url, extracted, job_title, country, region, city, display_currency)
-                    rows.append(row)
-                    yield {"type": "row", "row": row}
-                    if _has_data(row):
-                        source_pay_count += 1
-                        consecutive_no_data = 0
-                        domain_valid_rows += 1
-                    else:
-                        consecutive_no_data += 1
+            # Per-domain state
+            domain_had_valid = domain_yield.get(domain, {}).get("valid_rows", 0) > 0
+            bail_limit = 5 if domain_had_valid else 4  # stricter bail-out for untested domains
+            consecutive_wall = 0
+            consecutive_network = 0
+            consecutive_no_data = 0
+            domain_valid_rows = 0
+            domain_urls_fetched = 0
+            domain_wall_hits = 0
+            domain_network_errors = 0
+            domain_start_time = time.time()
 
-                # Check bail-out after each individual result (not just per batch)
-                if consecutive_no_data >= bail_limit:
+            # Get source type for this domain
+            current_source_type = get_source_type(domain)
+
+            # Process URLs in concurrent batches
+            url_idx = 0
+            while url_idx < len(urls):
+                if (source_pay_count >= TARGET_SOURCE_PAY_COUNT) and not _force_continue:
                     break
 
-        # Record domain yield stats
-        domain_yield[domain] = {
-            "valid_rows": domain_valid_rows,
-            "urls_fetched": domain_urls_fetched,
-        }
+                should_bail = (
+                    consecutive_wall >= BAIL_LIMITS["wall"] or
+                    consecutive_network >= BAIL_LIMITS["network"] or
+                    consecutive_no_data >= bail_limit
+                )
+                if should_bail:
+                    print(f"[pipeline] Bailing on {domain}: wall={consecutive_wall}, network={consecutive_network}, no_data={consecutive_no_data}")
+                    break
 
-        i += 1
-        domains_processed += 1
+                # 90-second wall-clock timeout per domain
+                if time.time() - domain_start_time > DOMAIN_WALL_CLOCK_TIMEOUT:
+                    yield {
+                        "type": "progress",
+                        "value": progress,
+                        "text": f"{domain} timed out (90s wall-clock), moving on",
+                    }
+                    break
 
-        # Minimum floor: if fewer than 14 data points after 15 domains, force continuation
-        if domains_processed == 15 and source_pay_count < 14:
-            _force_continue = True
-            print(f"[pipeline] Floor triggered: only {source_pay_count} data points after 15 domains, forcing continuation")
+                batch = urls[url_idx:url_idx + FETCH_BATCH_SIZE]
+                url_idx += FETCH_BATCH_SIZE
+                batch_results: list = [None] * len(batch)
 
-        # Reorder remaining domains by yield rate
-        if i < len(sites_queue):
-            remaining = sites_queue[i:]
-            sites_queue[i:] = _reorder_domains_by_yield(remaining, domain_yield)
+                with ThreadPoolExecutor(max_workers=FETCH_BATCH_SIZE) as executor:
+                    future_to_idx = {
+                        executor.submit(_fetch_and_extract, url, current_source_type): idx
+                        for idx, url in enumerate(batch)
+                    }
+                    for future, idx in future_to_idx.items():
+                        try:
+                            batch_results[idx] = future.result(timeout=URL_FETCH_TIMEOUT)
+                        except FuturesTimeoutError:
+                            batch_results[idx] = (
+                                batch[idx], None,
+                                _make_error("fetch", "URL fetch timed out (35s)"),
+                                None,
+                            )
+                        except Exception as e:
+                            batch_results[idx] = (
+                                batch[idx], None,
+                                _make_error("fetch", str(e)),
+                                None,
+                            )
+
+                # Yield results in original URL order
+                for result in batch_results:
+                    if result is None:
+                        continue
+                    url, page_text, fetch_error, extracted = result
+                    seen_urls.add(url)
+                    urls_fetched += 1
+                    domain_urls_fetched += 1
+
+                    if page_text is None:
+                        row = _empty_row(domain, url, display_currency, fetch_error)
+                        rows.append(row)
+                        yield {"type": "row", "row": row}
+                        error_class = _classify_fetch_error(fetch_error)
+                        if error_class == "wall":
+                            consecutive_wall += 1
+                            consecutive_network = 0
+                            consecutive_no_data = 0
+                            domain_wall_hits += 1
+                        elif error_class == "network":
+                            consecutive_network += 1
+                            consecutive_wall = 0
+                            consecutive_no_data = 0
+                            domain_network_errors += 1
+                        else:
+                            consecutive_no_data += 1
+                            consecutive_wall = 0
+                            consecutive_network = 0
+                    else:
+                        row = _build_row(domain, url, extracted, job_title, country, region, city, display_currency, current_source_type)
+                        rows.append(row)
+                        yield {"type": "row", "row": row}
+                        if _has_data(row):
+                            source_pay_count += 1
+                            consecutive_wall = 0
+                            consecutive_network = 0
+                            consecutive_no_data = 0
+                            domain_valid_rows += 1
+                        else:
+                            consecutive_no_data += 1
+                            consecutive_wall = 0
+                            consecutive_network = 0
+
+                    # Check bail-out after each individual result (not just per batch)
+                    should_bail = (
+                        consecutive_wall >= BAIL_LIMITS["wall"] or
+                        consecutive_network >= BAIL_LIMITS["network"] or
+                        consecutive_no_data >= bail_limit
+                    )
+                    if should_bail:
+                        break
+
+            # Record domain yield stats
+            domain_yield[domain] = {
+                "valid_rows": domain_valid_rows,
+                "urls_fetched": domain_urls_fetched,
+            }
+
+            # Emit health event for this domain
+            yield {
+                "type": "health",
+                "domain": domain,
+                "urls_fetched": domain_urls_fetched,
+                "valid_rows": domain_valid_rows,
+                "wall_hits": domain_wall_hits,
+                "network_errors": domain_network_errors,
+                "source_type": get_source_type(domain),
+            }
+
+            i += 1
+            domains_processed += 1
+
+            # Quality strategy switch at domain 10
+            if domains_processed == QUALITY_SWITCH_DOMAINS:
+                total_with_data_so_far = sum(1 for r in rows if _has_data(r))
+                if total_with_data_so_far > 0 and source_pay_count / total_with_data_so_far < QUALITY_SWITCH_THRESHOLD:
+                    old_niche = niche_level
+                    if niche_level == "niche":
+                        niche_level = "specialized"
+                    elif niche_level == "specialized":
+                        niche_level = "common"
+                    if niche_level != old_niche:
+                        print(f"[pipeline] Quality switch: {old_niche} → {niche_level} (only {source_pay_count}/{total_with_data_so_far} rows valid)")
+                        yield {"type": "progress", "value": progress, "text": f"Low data quality detected — expanding search scope..."}
+
+            # Minimum floor: if fewer than 20 data points after 15 domains, force continuation
+            if domains_processed == MINIMUM_VALID_FLOOR_DOMAINS and source_pay_count < MINIMUM_VALID_FLOOR:
+                _force_continue = True
+                print(f"[pipeline] Floor triggered: only {source_pay_count} data points after {MINIMUM_VALID_FLOOR_DOMAINS} domains, forcing continuation")
+
+            # Reorder remaining domains by yield rate
+            if i < len(sites_queue):
+                remaining = sites_queue[i:]
+                sites_queue[i:] = _reorder_domains_by_yield(remaining, domain_yield)
+
+    else:
+        # When loaded from cache, resolve country_currency and seen_urls for second-pass use
+        country_currency = get_country_currency(country)
+        seen_urls: set[str] = set(r.get("web_search_result_url", "") for r in rows if r.get("web_search_result_url"))
+        source_pay_count = sum(1 for r in rows if _has_data(r))
+        sites = []
 
     if not rows:
         yield {"type": "error", "message": "No search results found. Try a different job title or location."}
@@ -428,7 +634,100 @@ def run_pipeline(
             row["valid"] = 0
             row["validation_reason"] = "null pay rate"
 
-    # Build DataFrame
+    valid_df = pd.DataFrame(rows, columns=SCHEMA)
+    valid_df = valid_df[valid_df["valid"] == 1].copy()
+    valid_count = len(valid_df)
+
+    # Second pass: if insufficient valid data, retry with title variants + relaxed geo
+    if valid_count < 7 and not _from_cache and title_variants:
+        yield {
+            "type": "progress",
+            "value": 0.92,
+            "text": f"Only {valid_count} valid rows — running second pass with expanded search...",
+        }
+        print(f"[pipeline] Second pass triggered: {valid_count} valid rows, trying {len(title_variants)} title variants")
+
+        second_pass_domains = _pre_sort_domains(list(sites)[:10], country, job_vertical)
+
+        for variant_title in title_variants[:3]:
+            for sp_domain in second_pass_domains[:5]:
+                if sp_domain in FETCH_BLOCKLIST:
+                    continue
+                try:
+                    sp_urls = search_site(
+                        sp_domain, variant_title, country, "", "",
+                        description, serpapi_key, title_variants=None,
+                    )
+                except Exception:
+                    continue
+                for sp_url in sp_urls[:2]:
+                    if sp_url in seen_urls:
+                        continue
+                    page_text, fetch_error = fetch_page(sp_url)
+                    seen_urls.add(sp_url)
+                    if page_text:
+                        sp_source_type = get_source_type(sp_domain)
+                        sp_extracted = extract_salary(
+                            page_text, variant_title, country, "", "", client,
+                            country_currency, source_type=sp_source_type,
+                        )
+                        sp_row = _build_row(sp_domain, sp_url, sp_extracted, variant_title, country, "", "", display_currency, sp_source_type)
+                        rows.append(sp_row)
+                        yield {"type": "row", "row": sp_row}
+
+        # Re-run normalization and currency conversion on new rows only
+        for row in rows:
+            if row.get("display_pay_rate") is not None:
+                continue  # already processed
+            annual = row.get("found_annual_pay")
+            hourly = row.get("found_hourly_pay")
+            if hourly and not annual:
+                row["found_annual_pay"] = hourly * HOURS_PER_YEAR
+            elif annual and not hourly:
+                row["found_hourly_pay"] = annual / HOURS_PER_YEAR
+
+            found_currency = row.get("found_currency") or country_currency
+            if found_currency:
+                row["found_currency"] = found_currency
+
+            if display_pref == "Annual Salary":
+                source_amount = row.get("found_annual_pay")
+            else:
+                source_amount = row.get("found_hourly_pay")
+
+            if source_amount is not None and found_currency:
+                rate = _get_rate(found_currency, display_currency)
+                if rate is not None:
+                    row["display_pay_rate"] = source_amount * rate
+
+        # Re-validate all rows with data (including new ones)
+        all_rows_with_data = [r for r in rows if r.get("display_pay_rate") is not None and r.get("valid") is None]
+        if all_rows_with_data:
+            sp_validation = validate_rows_batch(
+                all_rows_with_data, job_title, country, region, city, client,
+                niche_level=niche_level, title_variants=title_variants,
+            )
+            vsp_idx = 0
+            for row in rows:
+                if row.get("display_pay_rate") is not None and row.get("valid") is None:
+                    if vsp_idx < len(sp_validation):
+                        vr = sp_validation[vsp_idx]
+                        row["valid"] = vr.get("valid", 0)
+                        row["validation_reason"] = vr.get("validation_reason")
+                    vsp_idx += 1
+
+        # Recount valid rows
+        valid_df = pd.DataFrame(rows, columns=SCHEMA)
+        valid_df = valid_df[valid_df["valid"] == 1].copy()
+        valid_count = len(valid_df)
+        print(f"[pipeline] Second pass complete: {valid_count} total valid rows")
+
+    # Save to cache after validation if valid_count >= 5
+    if valid_count >= 5 and not _from_cache:
+        valid_rows_for_cache = [r for r in rows if r.get("valid") == 1]
+        _save_cache(cache_key, valid_rows_for_cache)
+
+    # Build DataFrame (after all second pass processing)
     df = pd.DataFrame(rows, columns=SCHEMA)
     yield {"type": "stats", "df": df}
 
@@ -471,6 +770,7 @@ def run_pipeline(
     yield {"type": "summary", "data": summary_data}
 
     # Write session log
+    rows_with_data = [r for r in rows if r.get("display_pay_rate") is not None]
     try:
         log = {
             "run_id": str(uuid.uuid4()),
@@ -478,17 +778,18 @@ def run_pipeline(
             "country": country,
             "niche_level": niche_level,
             "title_variants": title_variants,
+            "job_vertical": job_vertical,
             "domains_tried": domains_processed,
             "urls_fetched": urls_fetched,
             "rows_extracted": len(rows),
             "rows_validated": len(rows_with_data),
             "rows_valid": valid_count,
+            "from_cache": _from_cache,
             "duration_seconds": round(time.time() - pipeline_start_time, 2),
             "confidence_level": "High" if valid_count >= 10 else "Moderate" if valid_count >= 5 else "Limited",
         }
-        with open("pipeline_run_log.json", "w") as f:
-            json.dump(log, f, indent=2)
-        print(f"[pipeline] Session log written: {log['run_id']}")
+        _append_log(log)
+        print(f"[pipeline] Session log appended: {log['run_id']}")
     except Exception as e:
         print(f"[pipeline] Failed to write session log: {e}")
 
@@ -545,6 +846,7 @@ def _build_row(
     region: str,
     city: str,
     display_currency: str,
+    source_type: str | None = None,    # NEW
 ) -> dict:
     all_null = (
         extracted.get("found_annual_pay") is None
@@ -560,11 +862,15 @@ def _build_row(
         "found_currency": extracted.get("found_currency"),
         "found_annual_pay": extracted.get("found_annual_pay"),
         "found_hourly_pay": extracted.get("found_hourly_pay"),
+        "found_pay_low": extracted.get("found_pay_low"),
+        "found_pay_high": extracted.get("found_pay_high"),
         "display_currency": display_currency,
         "display_pay_rate": None,
         "country": extracted.get("found_country") or country,
         "region": extracted.get("found_region") or region,
         "city": extracted.get("found_city") or city,
+        "remote_ok": extracted.get("remote_ok", 0),
+        "source_type": source_type,
         "valid": None,
         "error_message": _make_error("extract", extraction_error) if extraction_error else None,
         "validation_reason": None,
@@ -594,11 +900,15 @@ def _empty_row(domain: str, url: str, display_currency: str, error_message: str 
         "found_currency": None,
         "found_annual_pay": None,
         "found_hourly_pay": None,
+        "found_pay_low": None,
+        "found_pay_high": None,
         "display_currency": display_currency,
         "display_pay_rate": None,
         "country": None,
         "region": None,
         "city": None,
+        "remote_ok": 0,
+        "source_type": None,
         "valid": 0,
         "error_message": _make_error("fetch", error_message or "Page fetch failed") if error_message else None,
         "validation_reason": None,

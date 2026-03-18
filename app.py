@@ -441,6 +441,7 @@ with right_col:
             st.stop()
 
         # ── Pipeline ──────────────────────────────────────────────────────────
+        st.session_state["health_events"] = []
         st.markdown('<div class="sec-label">Pipeline</div>', unsafe_allow_html=True)
 
         progress_bar    = st.progress(0.0, text="Starting pipeline...")
@@ -453,6 +454,7 @@ with right_col:
         SCHEMA = [
             "country_specific_site_url", "web_search_result_url", "job_title",
             "found_currency", "found_annual_pay", "found_hourly_pay",
+            "found_pay_low", "found_pay_high", "remote_ok", "source_type",
             "display_currency", "display_pay_rate", "country", "region", "city", "valid",
             "error_message",
         ]
@@ -486,6 +488,11 @@ with right_col:
 
                 elif etype == "summary":
                     summary_data = event["data"]
+
+                elif etype == "health":
+                    if "health_events" not in st.session_state:
+                        st.session_state["health_events"] = []
+                    st.session_state["health_events"].append(event)
 
                 elif etype == "error":
                     st.error(event["message"])
@@ -740,3 +747,13 @@ with right_col:
                 )
         elif final_df is not None:
             st.info("No data rows were returned. Try a different job title, location, or check your API keys.")
+
+        # Pipeline debug expander
+        if st.session_state.get("health_events"):
+            with st.expander("🔍 Pipeline Debug (domain health)", expanded=False):
+                import pandas as pd
+                health_df = pd.DataFrame(st.session_state["health_events"])
+                # Drop the 'type' column if present
+                if "type" in health_df.columns:
+                    health_df = health_df.drop(columns=["type"])
+                st.dataframe(health_df, use_container_width=True)
