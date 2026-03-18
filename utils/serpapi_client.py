@@ -7,7 +7,7 @@ SALARY_SITE_WHITELIST: dict[str, list[str]] = {
     "US": [
         "salary.com", "payscale.com", "glassdoor.com", "comparably.com",
         "careerbliss.com", "salaryexpert.com", "levels.fyi", "talent.com",
-        "bls.gov", "onetonline.org", "zippia.com", "flexjobs.com",
+        "onetonline.org", "zippia.com", "flexjobs.com",
         "simplyhired.com", "ziprecruiter.com", "indeed.com",
     ],
     "UK": [
@@ -44,59 +44,6 @@ _COUNTRY_TO_KEY: dict[str, str] = {
 
 def _get_country_key(country: str) -> str:
     return _COUNTRY_TO_KEY.get(country, "GLOBAL")
-
-
-INDUSTRY_VERTICAL_SOURCES: dict[str, list[str]] = {
-    "healthcare": [
-        "nursesalaryguide.com", "nurse.com", "allnurses.com",
-        "bls.gov", "onetonline.org", "salary.com", "payscale.com",
-        "glassdoor.com",
-    ],
-    "tech": [
-        "levels.fyi", "glassdoor.com", "payscale.com",
-        "salary.com", "teamblind.com", "comparably.com",
-    ],
-    "legal": [
-        "nalp.org", "glassdoor.com", "salary.com", "payscale.com",
-    ],
-    "finance": [
-        "efinancialcareers.com", "glassdoor.com", "salary.com", "payscale.com",
-    ],
-    "government": [
-        "bls.gov", "onetonline.org", "usajobs.gov", "salary.com",
-    ],
-}
-
-_VERTICAL_KEYWORDS: dict[str, list[str]] = {
-    "healthcare": [
-        "nurse", "nursing", "rn", "lpn", "physician", "doctor", "md",
-        "therapist", "medical", "clinical", "health", "pharmacy", "pharmacist",
-        "dental", "dentist", "surgeon", "surgical", "icu", "er", "coordinator",
-        "case manager", "patient", "care coordinator", "health coordinator",
-    ],
-    "tech": [
-        "engineer", "developer", "programmer", "devops", "sre", "architect",
-        "data scientist", "machine learning", "ml", "ai", "software",
-        "backend", "frontend", "fullstack", "cloud", "cybersecurity",
-    ],
-    "legal": ["attorney", "lawyer", "paralegal", "counsel", "legal", "solicitor"],
-    "finance": [
-        "accountant", "analyst", "banker", "trader", "portfolio",
-        "financial", "cpa", "actuary", "controller", "cfo",
-    ],
-    "government": ["government", "federal", "public sector", "civil service", "municipal"],
-}
-
-
-def detect_job_vertical(job_title: str) -> str | None:
-    title_lower = job_title.lower()
-    # Healthcare check is first because "coordinator" alone shouldn't trigger it
-    # but "nursing coordinator" or "care coordinator" should
-    for vertical, keywords in _VERTICAL_KEYWORDS.items():
-        for kw in keywords:
-            if kw in title_lower:
-                return vertical
-    return None
 
 
 _DOMAIN_SOURCE_TYPE: dict[str, str] = {
@@ -240,10 +187,17 @@ def ai_suggest_salary_sources(job_title: str, country: str, anthropic_client) ->
     """
     try:
         prompt = (
-            f'What are the best websites to find accurate salary data for a "{job_title}" in {country}? '
-            f"Include industry-specific sites, government labor statistics, and general salary databases. "
+            f'I need websites that publish ACTUAL SALARY DATA (not just job listings) '
+            f'for a "{job_title}" in {country}.\n\n'
+            f"Rank by data credibility:\n"
+            f"1. Government labor statistics (e.g. bls.gov, onetonline.org) — highest\n"
+            f"2. Dedicated salary databases (e.g. salary.com, payscale.com, levels.fyi)\n"
+            f"3. Salary aggregators (e.g. glassdoor.com, comparably.com)\n"
+            f"4. Industry-specific sites that publish salary surveys for this role\n\n"
+            f"EXCLUDE: forums (reddit, allnurses, teamblind), job boards that only list openings "
+            f"without salary data, news articles, and blogs.\n\n"
             f'Return ONLY a JSON array of domain names, e.g. ["salary.com", "bls.gov"]. '
-            f"Return 6-10 domains, most relevant first. No explanations, no markdown."
+            f"Return 8-12 domains, highest credibility first. No explanations, no markdown."
         )
         response = anthropic_client.messages.create(
             model=_HAIKU_MODEL,
@@ -262,15 +216,14 @@ def ai_suggest_salary_sources(job_title: str, country: str, anthropic_client) ->
 def classify_job_niche(
     job_title: str,
     anthropic_client=None,
-) -> tuple[str, list[str], str | None]:
+) -> tuple[str, list[str]]:
     """Classify a job title as 'common', 'specialized', or 'niche'.
 
     Returns:
-        (niche_level, title_variants, job_vertical)
+        (niche_level, title_variants)
         - niche_level: 'common' | 'specialized' | 'niche'
         - title_variants: list of alternative/broader titles to also search for
           (empty for common titles)
-        - job_vertical: detected industry vertical or None
     """
     raw_words = job_title.strip().split()
     # Strip stop words and seniority words for classification only
@@ -281,19 +234,16 @@ def classify_job_niche(
     ]
     n_content = len(content_words)
 
-    # Detect job vertical for all titles
-    job_vertical = detect_job_vertical(job_title)
-
     if n_content <= 2:
         # Short meaningful content — almost always a common role
-        return "common", [], job_vertical
+        return "common", []
 
     # Count how many content words are well-known role/function tokens
     known = sum(1 for w in content_words if w in _COMMON_ROLE_TOKENS)
     if known >= n_content - 1:
         # Most content words are recognisable — "specialized" (may still need synonyms
         # for less-searched variants but doesn't need target reduction)
-        return "specialized", [], job_vertical
+        return "specialized", []
 
     # Otherwise genuinely niche — generate title variants for broader search coverage
     # Work on the original raw_words (stripped of stop words only, keep seniority)
@@ -353,26 +303,26 @@ def classify_job_niche(
             # Haiku call failed — silently continue with static-only variants
             pass
 
-    return "niche", unique_variants, job_vertical
+    return "niche", unique_variants
 
 
 def discover_top_sites(
     country: str,
     api_key: str,
     job_title: str | None = None,
-    job_vertical: str | None = None,
     anthropic_client=None,
 ) -> list[str]:
     """Discover top salary data sites for the given country using SerpAPI.
 
     When job_title and anthropic_client are provided, Claude Haiku is called to
-    suggest the most relevant salary sources for that specific role — covering any
-    job title regardless of industry vertical.
+    suggest the most relevant salary sources for that specific role.
+    AI suggestions are ranked first (by credibility), followed by the country
+    whitelist as a fallback.
     """
     country_key = _get_country_key(country)
     base_sites = list(SALARY_SITE_WHITELIST.get(country_key, SALARY_SITE_WHITELIST["GLOBAL"]))
 
-    # Priority order: AI suggestions → vertical sources → country whitelist
+    # Priority order: AI suggestions → country whitelist
     seen_sites: set[str] = set()
     merged: list[str] = []
 
@@ -384,14 +334,7 @@ def discover_top_sites(
                 seen_sites.add(s)
                 merged.append(s)
 
-    # 2. Hardcoded vertical sources as supplemental fallback
-    if job_vertical:
-        for s in INDUSTRY_VERTICAL_SOURCES.get(job_vertical, []):
-            if s not in seen_sites:
-                seen_sites.add(s)
-                merged.append(s)
-
-    # 3. Country whitelist
+    # 2. Country whitelist as fallback
     for s in base_sites:
         if s not in seen_sites:
             seen_sites.add(s)

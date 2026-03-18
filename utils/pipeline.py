@@ -11,30 +11,18 @@ from typing import Generator, Any
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import anthropic
 
-from utils.serpapi_client import discover_top_sites, search_site, classify_job_niche, get_source_type, SALARY_SITE_WHITELIST, INDUSTRY_VERTICAL_SOURCES
+from utils.serpapi_client import discover_top_sites, search_site, classify_job_niche, get_source_type, SALARY_SITE_WHITELIST
 from utils.jina_client import fetch_page
 from utils.claude_client import extract_salary, validate_rows_batch, generate_summary
 from utils.currency import convert_currency
 from utils.countries import get_country_currency
+from utils.bls_client import get_bls_wage_data
+from utils.blocklist import get_full_blocklist, add_to_dynamic_blocklist
 
 HOURS_PER_YEAR = 2080
 FETCH_BATCH_SIZE = 3
 URL_FETCH_TIMEOUT = 35       # seconds per individual URL fetch
 DOMAIN_WALL_CLOCK_TIMEOUT = 90  # seconds for the entire domain block
-
-# Domains that consistently return Cloudflare blocks, have no salary data,
-# or are geographically irrelevant to most searches — skip entirely.
-FETCH_BLOCKLIST = {
-    "reddit.com",         # Cloudflare-walled for Jina
-    "glassdoor.de",       # Cloudflare-walled for Jina
-    "glassdoor.fr",       # Cloudflare-walled for Jina
-    "ttecjobs.com",       # Job listings, never contains salary figures
-    "indeed.com",         # Cloudflare-walled globally for Jina
-    "roberthalf.com",     # Consistent timeouts with Jina
-    "monster.com",        # Consistent timeouts/blocks with Jina
-    "jobted.com",         # Job listings only, no salary figures
-    "manpower.com",       # Company site, not salary data
-}
 
 # Adaptive target data-point counts by job niche level
 TARGET_BY_NICHE = {
@@ -204,19 +192,16 @@ def _country_to_key(country: str) -> str:
     return mapping.get(country, "GLOBAL")
 
 
-def _pre_sort_domains(domains: list[str], country: str, job_vertical: str | None) -> list[str]:
+def _pre_sort_domains(domains: list[str], country: str) -> list[str]:
     """Pre-sort domains before the main loop: high-priority sources first."""
     country_key = _country_to_key(country)
     high_priority = set(SALARY_SITE_WHITELIST.get(country_key, []))
-    vertical_priority = set(INDUSTRY_VERTICAL_SOURCES.get(job_vertical, [])) if job_vertical else set()
-    blocked = FETCH_BLOCKLIST
+    blocked = get_full_blocklist()
 
     def domain_priority(d: str) -> int:
         if d in blocked:
             return 999
         score = 50
-        if d in vertical_priority:
-            score -= 20
         if d in high_priority:
             score -= 10
         stype = get_source_type(d)
@@ -262,9 +247,9 @@ def run_pipeline(
     domains_processed = 0
 
     # Classify job title niche before anything else — drives TARGET and search strategy
-    niche_level, title_variants, job_vertical = classify_job_niche(job_title, anthropic_client=client)
+    niche_level, title_variants = classify_job_niche(job_title, anthropic_client=client)
     TARGET_SOURCE_PAY_COUNT = TARGET_BY_NICHE[niche_level]
-    print(f"[pipeline] Job niche: {niche_level} | TARGET={TARGET_SOURCE_PAY_COUNT} | variants={title_variants} | vertical={job_vertical}")
+    print(f"[pipeline] Job niche: {niche_level} | TARGET={TARGET_SOURCE_PAY_COUNT} | variants={title_variants}")
 
     # Cache check — if we have fresh results, skip discovery + fetch entirely
     cache_key = _get_cache_key(job_title, country, region)
@@ -280,6 +265,18 @@ def run_pipeline(
         }
 
     if not _from_cache:
+        # Step 0: Kick off BLS data fetch in background (US only)
+        bls_future = None
+        if _country_to_key(country) == "US":
+            bls_executor = ThreadPoolExecutor(max_workers=1)
+            bls_api_key = None
+            try:
+                import streamlit as _st
+                bls_api_key = _st.secrets.get("BLS_API_KEY")
+            except Exception:
+                pass
+            bls_future = bls_executor.submit(get_bls_wage_data, job_title, client, bls_api_key)
+
         # Step 1: Discover top sites (5%)
         yield {
             "type": "progress",
@@ -294,7 +291,6 @@ def run_pipeline(
             sites = discover_top_sites(
                 country, serpapi_key,
                 job_title=job_title,
-                job_vertical=job_vertical,
                 anthropic_client=client,
             )
         except Exception as e:
@@ -308,6 +304,19 @@ def run_pipeline(
         # Resolve the country's native currency once — used as a fallback when Claude
         # extracts a pay number but fails to identify the currency code.
         country_currency = get_country_currency(country)
+
+        # Collect BLS results if the background fetch completed
+        if bls_future is not None:
+            try:
+                bls_rows = bls_future.result(timeout=20)
+                for bls_row in bls_rows:
+                    bls_row["display_currency"] = display_currency
+                    rows.append(bls_row)
+                    yield {"type": "row", "row": bls_row}
+                if bls_rows:
+                    print(f"[pipeline] Injected {len(bls_rows)} BLS row(s) into data pool")
+            except Exception as e:
+                print(f"[pipeline] BLS fetch failed (non-blocking): {e}")
 
         # Steps 2 & 3: Search + fetch per site (10%–80%)
         source_pay_count = 0
@@ -326,14 +335,15 @@ def run_pipeline(
             return url, page_text, None, extracted
 
         # Pre-sort domains before the main loop: high-priority sources first.
-        sites_queue = _pre_sort_domains(list(sites), country, job_vertical)
+        sites_queue = _pre_sort_domains(list(sites), country)
+        active_blocklist = get_full_blocklist()
         i = 0
 
         while i < len(sites_queue):
             domain = sites_queue[i]
 
             # Skip permanently blocked domains
-            if domain in FETCH_BLOCKLIST:
+            if domain in active_blocklist:
                 i += 1
                 continue
 
@@ -496,6 +506,11 @@ def run_pipeline(
                 "source_type": get_source_type(domain),
             }
 
+            # Add to dynamic blocklist if domain hit the wall bail limit
+            if domain_wall_hits >= BAIL_LIMITS["wall"]:
+                add_to_dynamic_blocklist(domain)
+                active_blocklist = get_full_blocklist()  # refresh
+
             i += 1
             domains_processed += 1
 
@@ -652,11 +667,11 @@ def run_pipeline(
         }
         print(f"[pipeline] Second pass triggered: {valid_count} valid rows, trying {len(title_variants)} title variants")
 
-        second_pass_domains = _pre_sort_domains(list(sites)[:10], country, job_vertical)
+        second_pass_domains = _pre_sort_domains(list(sites)[:10], country)
 
         for variant_title in title_variants[:3]:
             for sp_domain in second_pass_domains[:5]:
-                if sp_domain in FETCH_BLOCKLIST:
+                if sp_domain in get_full_blocklist():
                     continue
                 try:
                     sp_urls = search_site(
@@ -783,7 +798,6 @@ def run_pipeline(
             "country": country,
             "niche_level": niche_level,
             "title_variants": title_variants,
-            "job_vertical": job_vertical,
             "domains_tried": domains_processed,
             "urls_fetched": urls_fetched,
             "rows_extracted": len(rows),
