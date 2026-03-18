@@ -395,14 +395,20 @@ def generate_summary(
     location_parts = [p for p in [city, region, country] if p]
     location_str = ", ".join(location_parts) if location_parts else country
 
-    # Format valid rows as markdown table (supplementary context only)
+    # Format valid rows as supplementary context
+    supplementary_data = "No valid data found"
     if valid_rows_df is not None and len(valid_rows_df) > 0:
-        cols = ["job_title", "found_currency", "display_pay_rate", "country", "region", "city"]
-        available_cols = [c for c in cols if c in valid_rows_df.columns]
-        table_df = valid_rows_df[available_cols].head(20)
-        supplementary_data = table_df.to_markdown(index=False)
-    else:
-        supplementary_data = "No valid data found"
+        try:
+            cols = ["job_title", "found_currency", "display_pay_rate", "country", "region", "city"]
+            available_cols = [c for c in cols if c in valid_rows_df.columns]
+            table_df = valid_rows_df[available_cols].head(20)
+            supplementary_data = table_df.to_markdown(index=False)
+        except Exception:
+            # Fallback to simple text representation if to_markdown fails
+            rows_text = []
+            for _, row in valid_rows_df.head(20).iterrows():
+                rows_text.append(f"{row.get('job_title','?')} | {row.get('display_pay_rate','?')} {row.get('found_currency','?')} | {row.get('country','?')}")
+            supplementary_data = "\n".join(rows_text)
 
     confidence_note = (
         "\n⚠️ IMPORTANT: Only a small number of data points were collected for this query. "

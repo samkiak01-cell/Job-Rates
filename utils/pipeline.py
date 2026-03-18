@@ -755,7 +755,7 @@ def run_pipeline(
             )
         except Exception as e:
             print(f"[pipeline] generate_summary error: {e}")
-            summary_data = None
+            summary_data = _build_summary_stub(valid_count, [f"summary_error: {e}"])
     else:
         try:
             summary_data = generate_summary(
@@ -765,7 +765,7 @@ def run_pipeline(
             )
         except Exception as e:
             print(f"[pipeline] generate_summary error: {e}")
-            summary_data = None
+            summary_data = _build_summary_stub(valid_count, [f"summary_error: {e}"])
 
     yield {"type": "summary", "data": summary_data}
 
