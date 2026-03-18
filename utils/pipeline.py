@@ -291,7 +291,12 @@ def run_pipeline(
         }
 
         try:
-            sites = discover_top_sites(country, serpapi_key, job_vertical=job_vertical)
+            sites = discover_top_sites(
+                country, serpapi_key,
+                job_title=job_title,
+                job_vertical=job_vertical,
+                anthropic_client=client,
+            )
         except Exception as e:
             yield {"type": "error", "message": f"Site discovery failed: {e}"}
             return

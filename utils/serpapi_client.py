@@ -232,6 +232,33 @@ _TITLE_STOP_WORDS = {"of", "the", "and", "for", "in", "at", "to", "a", "an", "&"
 _HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 
+def ai_suggest_salary_sources(job_title: str, country: str, anthropic_client) -> list[str]:
+    """Ask Claude Haiku to suggest the best salary data websites for any job title and country.
+
+    Returns a deduplicated list of domain names, most relevant first.
+    Falls back to [] silently on any failure.
+    """
+    try:
+        prompt = (
+            f'What are the best websites to find accurate salary data for a "{job_title}" in {country}? '
+            f"Include industry-specific sites, government labor statistics, and general salary databases. "
+            f'Return ONLY a JSON array of domain names, e.g. ["salary.com", "bls.gov"]. '
+            f"Return 6-10 domains, most relevant first. No explanations, no markdown."
+        )
+        response = anthropic_client.messages.create(
+            model=_HAIKU_MODEL,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        domains = json.loads(raw)
+        if isinstance(domains, list):
+            return [d.strip().lower() for d in domains if isinstance(d, str) and d.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def classify_job_niche(
     job_title: str,
     anthropic_client=None,
@@ -332,26 +359,45 @@ def classify_job_niche(
 def discover_top_sites(
     country: str,
     api_key: str,
+    job_title: str | None = None,
     job_vertical: str | None = None,
+    anthropic_client=None,
 ) -> list[str]:
-    """Discover top salary data sites for the given country using SerpAPI."""
+    """Discover top salary data sites for the given country using SerpAPI.
+
+    When job_title and anthropic_client are provided, Claude Haiku is called to
+    suggest the most relevant salary sources for that specific role — covering any
+    job title regardless of industry vertical.
+    """
     country_key = _get_country_key(country)
     base_sites = list(SALARY_SITE_WHITELIST.get(country_key, SALARY_SITE_WHITELIST["GLOBAL"]))
 
-    # Prepend industry-vertical sources (deduplicated, vertical sources first)
+    # Priority order: AI suggestions → vertical sources → country whitelist
+    seen_sites: set[str] = set()
+    merged: list[str] = []
+
+    # 1. AI-suggested sources (most relevant for this specific job title)
+    if anthropic_client and job_title:
+        ai_sites = ai_suggest_salary_sources(job_title, country, anthropic_client)
+        for s in ai_sites:
+            if not _is_wrong_tld(s, country_key) and s not in seen_sites:
+                seen_sites.add(s)
+                merged.append(s)
+
+    # 2. Hardcoded vertical sources as supplemental fallback
     if job_vertical:
-        vertical_sites = INDUSTRY_VERTICAL_SOURCES.get(job_vertical, [])
-        seen_sites: set[str] = set()
-        merged: list[str] = []
-        for s in vertical_sites:
+        for s in INDUSTRY_VERTICAL_SOURCES.get(job_vertical, []):
             if s not in seen_sites:
                 seen_sites.add(s)
                 merged.append(s)
-        for s in base_sites:
-            if s not in seen_sites:
-                seen_sites.add(s)
-                merged.append(s)
-        base_sites = merged
+
+    # 3. Country whitelist
+    for s in base_sites:
+        if s not in seen_sites:
+            seen_sites.add(s)
+            merged.append(s)
+
+    base_sites = merged
 
     local_terms = COUNTRY_SALARY_TERMS.get(country, [])
     extra = f" {local_terms[0]}" if local_terms else ""
